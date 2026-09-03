@@ -1,4 +1,4 @@
-.PHONY: up down api worker ingest-small verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs
+.PHONY: up down api worker ingest-help ingest-small verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs
 
 up:
 	docker compose up -d
@@ -26,6 +26,9 @@ logs:
 
 worker:
 	cd backend && go run ./cmd/worker
+
+ingest-help:
+	cd backend && go run ./cmd/ingest --help
 
 ingest-small:
 	cd backend && go run ./cmd/ingest --site academia.stackexchange.com
