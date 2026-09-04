@@ -8,6 +8,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
+	domainingestion "quorum/internal/domain/ingestion"
+	usecaseingestion "quorum/internal/usecase/ingestion"
 	"syscall"
 )
 
@@ -18,22 +21,58 @@ type options struct {
 	maxRecordBytes                                         int
 }
 
+func (o options) command() (usecaseingestion.Command, error) {
+	site, err := domainingestion.ParseSite(o.siteRaw)
+	if err != nil {
+		return usecaseingestion.Command{}, err
+	}
+
+	tables, err := domainingestion.ParseTables(o.tablesRaw)
+	if err != nil {
+		return usecaseingestion.Command{}, err
+	}
+
+	rawPath := resolveArchivePath(site, o.archivePath)
+
+	return usecaseingestion.NewCommand(site, rawPath, tables, o.dryRun, o.rejectThresholdPercent, o.maxRecordBytes, o.watermarkPatternsPath)
+}
+
+func resolveArchivePath(site domainingestion.Site, explicit string) string {
+	if explicit == "" {
+		return filepath.Join("data", fmt.Sprintf("%s.7z", site))
+	}
+
+	return explicit
+}
+
+func locateOptionError(err error) usecaseingestion.RunError {
+	var tableErr domainingestion.UnsupportedTableError
+	if errors.As(err, &tableErr) {
+		return usecaseingestion.RunError{
+			Table:  tableErr.Value,
+			Offset: 0,
+			Err:    err,
+		}
+	}
+
+	return usecaseingestion.RunError{
+		Table:  "request",
+		Offset: 0,
+		Err:    err,
+	}
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
-
-	switch code {
-	case 0:
-		os.Exit(0)
-	case 2:
-		os.Exit(2)
-	}
+	os.Exit(code)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	_, err := parseOptions(args, stderr)
+	opts, err := parseOptions(args, stderr)
+
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
@@ -42,7 +81,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	fmt.Fprintln(stdout, "status=ok")
+	cmd, err := opts.command()
+	if err != nil {
+		runErr := locateOptionError(err)
+		fmt.Fprintln(stderr, runErr)
+		return 1
+	}
+
+	_ = cmd
 	return 0
 }
 
@@ -94,6 +140,10 @@ func writeUsage(w io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintln(w, "Usage: quorum-ingest [flags]")
 
 	fs.VisitAll(func(f *flag.Flag) {
-		fmt.Fprintf(w, "--%s  default=%s  %s\n", f.Name, f.DefValue, f.Usage)
+		defaultValue := f.DefValue
+		if defaultValue == "" {
+			defaultValue = `""`
+		}
+		fmt.Fprintf(w, "--%s  default=%s  %s\n", f.Name, defaultValue, f.Usage)
 	})
 }
