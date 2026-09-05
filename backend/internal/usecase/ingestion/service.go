@@ -7,11 +7,15 @@ import (
 	"quorum/internal/domain/ingestion"
 )
 
-type Service struct{ archives ArchiveFactory }
+type Service struct {
+	archives ArchiveFactory
+	policies []ingestion.Policy
+}
 
-func NewService(archives ArchiveFactory) Service {
+func NewService(archives ArchiveFactory, policies ...ingestion.Policy) Service {
 	return Service{
 		archives: archives,
+		policies: append([]ingestion.Policy(nil), policies...),
 	}
 }
 func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, runErr error) {
@@ -40,6 +44,20 @@ func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, 
 
 		if tableErr != nil {
 			return summary.WithStatus(RunStatusFailed), tableErr
+		}
+	}
+
+	summary.ObservedPercent = summary.MaxRejectedPercent()
+	failingTable, exceeded := summary.FirstTableAbove(command.RejectThresholdPercent)
+	if exceeded {
+		summary.Status = RunStatusFailed
+		return summary, RunError{
+			Table:  failingTable.Table.String(),
+			Offset: failingTable.LastOffset,
+			Err: RejectThresholdError{
+				ObservedPercent:  failingTable.RejectedPercent(),
+				ThresholdPercent: command.RejectThresholdPercent,
+			},
 		}
 	}
 
@@ -122,8 +140,15 @@ func (s Service) processTable(ctx context.Context, archive Archive, table ingest
 		}
 
 		summary.Processed++
-		summary.Valid++
 		summary.LastOffset = record.Offset
+
+		finding, rejected := ingestion.FirstFinding(record, s.policies)
+		if rejected {
+			summary.Rejected++
+			summary.Rejections[finding.Reason]++
+		} else {
+			summary.Valid++
+		}
 	}
 
 	return summary, nil

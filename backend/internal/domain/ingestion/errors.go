@@ -11,6 +11,7 @@ var ErrEmptyTables = errors.New("at least one corpus table is required")
 var ErrMalformedRecord = errors.New("malformed XML record")
 var ErrRecordTooLarge = errors.New("source record exceeds configured byte limit")
 var ErrUnexpectedSourceLine = errors.New("unexpected content in source XML")
+var ErrEmptyWatermarkPatterns = errors.New("watermark policy requires at least one pattern")
 
 type UnsupportedTableError struct {
 	Value string

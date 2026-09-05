@@ -4,8 +4,6 @@ import (
 	"maps"
 )
 
-type ReasonCode string
-
 type SourceRecord struct {
 	Table      Table
 	Offset     int64

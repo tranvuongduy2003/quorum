@@ -12,8 +12,12 @@ import (
 	"quorum/internal/adapter/source/stackexchange"
 	domainingestion "quorum/internal/domain/ingestion"
 	usecaseingestion "quorum/internal/usecase/ingestion"
+	"strings"
 	"syscall"
+	"unicode/utf8"
 )
+
+const MaxWatermarkPatternFileBytes = 1024 * 1024
 
 type options struct {
 	siteRaw, archivePath, tablesRaw, watermarkPatternsPath string
@@ -89,10 +93,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	patterns, err := loadWatermarkPatterns(cmd.WatermarkPatternsPath)
+	if err != nil {
+		fmt.Fprintln(stderr, locateOptionError(err))
+		return 1
+	}
+
+	policies := []domainingestion.Policy{
+		domainingestion.NewTimestampPolicy(),
+	}
+	if len(patterns) > 0 {
+		policy, policyErr := domainingestion.NewWatermarkPolicy(patterns)
+		if policyErr != nil {
+			fmt.Fprintln(stderr, locateOptionError(policyErr))
+			return 1
+		}
+		policies = append(policies, policy)
+	}
+
 	factory := stackexchange.NewFactory()
-	service := usecaseingestion.NewService(factory)
+	service := usecaseingestion.NewService(factory, policies...)
 
 	summary, err := service.Run(ctx, cmd)
+	return writeRunResult(stdout, stderr, summary, err)
+}
+
+func writeRunResult(stdout, stderr io.Writer, summary usecaseingestion.RunSummary, err error) int {
 	if err != nil {
 		if len(summary.Tables) > 0 {
 			usecaseingestion.PrintSummary(stdout, summary)
@@ -103,6 +129,53 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	usecaseingestion.PrintSummary(stdout, summary)
 	return 0
+}
+
+func loadWatermarkPatterns(path string) (patterns []string, err error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	data, err := io.ReadAll(io.LimitReader(file, MaxWatermarkPatternFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxWatermarkPatternFileBytes {
+		return nil, fmt.Errorf("watermark pattern file exceeds %d bytes", MaxWatermarkPatternFileBytes)
+	}
+	if !utf8.Valid(data) {
+		return nil, errors.New("watermark pattern file must contain valid UTF-8")
+	}
+
+	seen := make(map[string]struct{})
+	for _, pattern := range strings.Split(string(data), "\n") {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+
+		seen[pattern] = struct{}{}
+		patterns = append(patterns, pattern)
+	}
+
+	if len(patterns) == 0 {
+		return nil, domainingestion.ErrEmptyWatermarkPatterns
+	}
+
+	return patterns, nil
 }
 
 func parseOptions(args []string, stderr io.Writer) (options, error) {
