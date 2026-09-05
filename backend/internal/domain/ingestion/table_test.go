@@ -105,3 +105,16 @@ func TestParseTablesDistinguishesBlankSelection(t *testing.T) {
 		t.Fatalf("ParseTables() error = %#v, want empty UnsupportedTableError", err)
 	}
 }
+
+func TestNewSourceRecordCopiesAttributesAndPreservesRaw(t *testing.T) {
+	attributes := map[string]string{"Id": "1"}
+	record := NewSourceRecord(TablePosts, 12, "  <row Id=\"1\" />", attributes)
+	attributes["Id"] = "2"
+
+	if got, _ := record.Attribute("Id"); got != "1" {
+		t.Fatalf("Attribute(Id) = %q, want 1", got)
+	}
+	if got, want := record.Raw, "  <row Id=\"1\" />"; got != want {
+		t.Fatalf("Raw = %q, want %q", got, want)
+	}
+}

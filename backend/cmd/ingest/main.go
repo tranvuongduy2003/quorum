@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"quorum/internal/adapter/source/stackexchange"
 	domainingestion "quorum/internal/domain/ingestion"
 	usecaseingestion "quorum/internal/usecase/ingestion"
 	"syscall"
@@ -88,7 +89,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	_ = cmd
+	factory := stackexchange.NewFactory()
+	service := usecaseingestion.NewService(factory)
+
+	summary, err := service.Run(ctx, cmd)
+	if err != nil {
+		if len(summary.Tables) > 0 {
+			usecaseingestion.PrintSummary(stdout, summary)
+		}
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	usecaseingestion.PrintSummary(stdout, summary)
 	return 0
 }
 
