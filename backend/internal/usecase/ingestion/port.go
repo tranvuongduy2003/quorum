@@ -19,3 +19,7 @@ type RecordStream interface {
 	Next(ctx context.Context) (domainingestion.SourceRecord, error)
 	Close() error
 }
+
+type QuarantineStore interface {
+	Save(ctx context.Context, record domainingestion.QuarantineRecord) error
+}

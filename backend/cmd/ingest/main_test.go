@@ -151,6 +151,29 @@ func TestRunLocatesPatternFileErrorsAtRequest(t *testing.T) {
 	}
 }
 
+func TestRunDryRunDoesNotLoadPostgresConfiguration(t *testing.T) {
+	t.Setenv("POSTGRES_DB", "")
+	t.Setenv("POSTGRES_USER", "")
+	t.Setenv("POSTGRES_PASSWORD", "")
+	t.Setenv("POSTGRES_HOST", "")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run(context.Background(), []string{
+		"--site", "stackoverflow.com",
+		"--archive", filepath.Join(t.TempDir(), "missing.7z"),
+		"--tables", "posts",
+		"--dry-run",
+	}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("run() code = %d, want 1", code)
+	}
+	if strings.Contains(stderr.String(), "invalid configuration") {
+		t.Fatalf("dry-run loaded PostgreSQL configuration: %s", stderr.String())
+	}
+}
+
 func TestWriteRunResultPrintsCompleteSummaryBeforeTerminalError(t *testing.T) {
 	summary := usecaseingestion.RunSummary{
 		Tables: []usecaseingestion.TableSummary{

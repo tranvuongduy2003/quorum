@@ -125,6 +125,20 @@ func LoadEnvFile() (string, error) {
 	return "", nil
 }
 
+func LoadPostgres() (PostgresConfig, error) {
+	var cfg Config
+	l := newLoader()
+
+	loadPostgresConfig(&cfg, l)
+
+	err := l.err()
+	if err != nil {
+		return PostgresConfig{}, err
+	}
+
+	return cfg.Postgres, nil
+}
+
 func loadServerConfig(cfg *Config, l *loader) {
 	cfg.Server = ServerConfig{
 		Port:            l.integer("BACKEND_PORT", 8080),

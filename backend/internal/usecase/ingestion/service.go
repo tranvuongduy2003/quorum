@@ -4,21 +4,40 @@ import (
 	"context"
 	"errors"
 	"io"
-	"quorum/internal/domain/ingestion"
+	domainingestion "quorum/internal/domain/ingestion"
+	"time"
 )
 
 type Service struct {
-	archives ArchiveFactory
-	policies []ingestion.Policy
+	archives   ArchiveFactory
+	quarantine QuarantineStore
+	now        func() time.Time
+	policies   []domainingestion.Policy
 }
 
-func NewService(archives ArchiveFactory, policies ...ingestion.Policy) Service {
+func NewService(
+	archives ArchiveFactory,
+	quarantine QuarantineStore,
+	now func() time.Time,
+	policies ...domainingestion.Policy,
+) Service {
+	if now == nil {
+		now = time.Now
+	}
+
 	return Service{
-		archives: archives,
-		policies: append([]ingestion.Policy(nil), policies...),
+		archives:   archives,
+		quarantine: quarantine,
+		now:        now,
+		policies:   append([]domainingestion.Policy(nil), policies...),
 	}
 }
 func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, runErr error) {
+	if !command.DryRun && s.quarantine == nil {
+		summary = summary.WithStatus(RunStatusFailed)
+		return summary, RunError{Table: "request", Offset: 0, Err: ErrQuarantineStoreRequired}
+	}
+
 	archive, err := s.openValidated(ctx, command)
 	if err != nil {
 		return RunSummary{}, err
@@ -38,7 +57,7 @@ func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, 
 	}
 
 	for _, table := range command.Tables {
-		tSum, tableErr := s.processTable(ctx, archive, table, command.MaxRecordBytes)
+		tSum, tableErr := s.processTable(ctx, archive, table, command)
 
 		summary.Tables = append(summary.Tables, tSum)
 
@@ -85,13 +104,13 @@ func (s Service) openValidated(ctx context.Context, command Command) (Archive, e
 	return archive, nil
 }
 
-func (s Service) processTable(ctx context.Context, archive Archive, table ingestion.Table, maxRecordBytes int) (summary TableSummary, runErr error) {
+func (s Service) processTable(ctx context.Context, archive Archive, table domainingestion.Table, command Command) (summary TableSummary, runErr error) {
 	summary = TableSummary{
 		Table:      table,
-		Rejections: make(map[ingestion.ReasonCode]int64),
+		Rejections: make(map[domainingestion.ReasonCode]int64),
 	}
 
-	member, err := archive.OpenTable(ctx, table, maxRecordBytes)
+	member, err := archive.OpenTable(ctx, table, command.MaxRecordBytes)
 	if err != nil {
 		var sourceErr SourceError
 		if errors.As(err, &sourceErr) {
@@ -142,12 +161,26 @@ func (s Service) processTable(ctx context.Context, archive Archive, table ingest
 		summary.Processed++
 		summary.LastOffset = record.Offset
 
-		finding, rejected := ingestion.FirstFinding(record, s.policies)
+		finding, rejected := domainingestion.FirstFinding(record, s.policies)
 		if rejected {
 			summary.Rejected++
 			summary.Rejections[finding.Reason]++
 		} else {
 			summary.Valid++
+		}
+
+		if !rejected || command.DryRun {
+			continue
+		}
+
+		quarantineRecord := domainingestion.NewQuarantineRecord(command.Site, record, finding.Reason, s.now())
+		err = s.quarantine.Save(ctx, quarantineRecord)
+		if err != nil {
+			return summary, RunError{
+				Table:  record.Table.String(),
+				Offset: record.Offset,
+				Err:    err,
+			}
 		}
 	}
 

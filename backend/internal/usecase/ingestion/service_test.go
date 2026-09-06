@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	domainingestion "quorum/internal/domain/ingestion"
 )
@@ -57,6 +58,16 @@ type fakeArchiveFactory struct {
 	opened  bool
 }
 
+type fakeQuarantineStore struct {
+	records []domainingestion.QuarantineRecord
+	err     error
+}
+
+func (s *fakeQuarantineStore) Save(_ context.Context, record domainingestion.QuarantineRecord) error {
+	s.records = append(s.records, record)
+	return s.err
+}
+
 func (f *fakeArchiveFactory) Open(string) (Archive, error) {
 	f.opened = true
 	return f.archive, nil
@@ -67,7 +78,7 @@ func TestServiceRunProcessesTablesSequentiallyAndClosesResources(t *testing.T) {
 	votes := &fakeRecordStream{results: []streamResult{{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, 3, "<row />", nil)}, {err: io.EOF}}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts, domainingestion.TableVotes: votes}}
 	factory := &fakeArchiveFactory{archive: archive}
-	service := NewService(factory)
+	service := NewService(factory, nil, nil)
 	command := testCommand(t, []domainingestion.Table{domainingestion.TablePosts, domainingestion.TableVotes})
 
 	summary, err := service.Run(context.Background(), command)
@@ -91,7 +102,7 @@ func TestServiceRunReturnsPartialMalformedSummary(t *testing.T) {
 	malformed := SourceError{Table: domainingestion.TablePosts, Offset: 21, Err: domainingestion.ErrMalformedRecord}
 	posts := &fakeRecordStream{results: []streamResult{{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 5, "<row />", nil)}, {err: malformed}}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
-	service := NewService(&fakeArchiveFactory{archive: archive})
+	service := NewService(&fakeArchiveFactory{archive: archive}, nil, nil)
 
 	summary, err := service.Run(context.Background(), testCommand(t, []domainingestion.Table{domainingestion.TablePosts}))
 	if summary.Status != RunStatusFailed || len(summary.Tables) != 1 {
@@ -128,7 +139,7 @@ func TestServiceRunReturnsCompleteSummaryBeforeThresholdFailure(t *testing.T) {
 		domainingestion.TablePosts: posts,
 		domainingestion.TableVotes: votes,
 	}}
-	service := NewService(&fakeArchiveFactory{archive: archive}, watermark)
+	service := NewService(&fakeArchiveFactory{archive: archive}, nil, nil, watermark)
 	command := testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts, domainingestion.TableVotes}, 10)
 
 	summary, err := service.Run(context.Background(), command)
@@ -164,7 +175,7 @@ func TestServiceRunAllowsRejectionRateEqualToThreshold(t *testing.T) {
 	results = append(results, streamResult{err: io.EOF})
 	posts := &fakeRecordStream{results: results}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
-	service := NewService(&fakeArchiveFactory{archive: archive}, watermark)
+	service := NewService(&fakeArchiveFactory{archive: archive}, nil, nil, watermark)
 
 	summary, err := service.Run(context.Background(), testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, 0.5))
 
@@ -188,7 +199,7 @@ func TestServiceRunClassifiesRecordsWithFirstMatchingPolicy(t *testing.T) {
 		{err: io.EOF},
 	}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
-	service := NewService(&fakeArchiveFactory{archive: archive}, domainingestion.NewTimestampPolicy(), watermark)
+	service := NewService(&fakeArchiveFactory{archive: archive}, nil, nil, domainingestion.NewTimestampPolicy(), watermark)
 
 	summary, err := service.Run(context.Background(), testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, 100))
 	if err != nil {
@@ -211,7 +222,7 @@ func TestServiceRunClassifiesRecordsWithFirstMatchingPolicy(t *testing.T) {
 
 func TestServiceRunDoesNotOpenArchiveAfterCancellation(t *testing.T) {
 	factory := &fakeArchiveFactory{archive: &fakeArchive{}}
-	service := NewService(factory)
+	service := NewService(factory, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -225,13 +236,130 @@ func TestServiceRunDoesNotOpenArchiveAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestServiceRunRequiresQuarantineStoreBeforeOpeningArchive(t *testing.T) {
+	factory := &fakeArchiveFactory{archive: &fakeArchive{}}
+	service := NewService(factory, nil, nil)
+	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
+
+	summary, err := service.Run(context.Background(), command)
+
+	if factory.opened {
+		t.Fatal("Run() opened an archive without a quarantine store")
+	}
+	if summary.Status != RunStatusFailed {
+		t.Fatalf("summary status = %q, want %q", summary.Status, RunStatusFailed)
+	}
+	var runErr RunError
+	if !errors.As(err, &runErr) || runErr.Table != "request" || runErr.Offset != 0 || !errors.Is(err, ErrQuarantineStoreRequired) {
+		t.Fatalf("Run() error = %#v", err)
+	}
+}
+
+func TestServiceRunPersistsOnlyRejectedRecordsWithCurrentTime(t *testing.T) {
+	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
+	if err != nil {
+		t.Fatalf("NewWatermarkPolicy() error = %v", err)
+	}
+	rejected := domainingestion.NewSourceRecord(domainingestion.TablePosts, 8, "synthetic-marker", map[string]string{"Id": "1"})
+	posts := &fakeRecordStream{results: []streamResult{
+		{record: rejected},
+		{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 16, "clean", nil)},
+		{err: io.EOF},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
+	store := &fakeQuarantineStore{}
+	foundAt := time.Date(2026, time.September, 6, 10, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
+	service := NewService(&fakeArchiveFactory{archive: archive}, store, func() time.Time { return foundAt }, watermark)
+	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
+
+	summary, err := service.Run(context.Background(), command)
+
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if summary.Tables[0].Rejected != 1 || summary.Tables[0].Valid != 1 {
+		t.Fatalf("table summary = %#v", summary.Tables[0])
+	}
+	if got, want := len(store.records), 1; got != want {
+		t.Fatalf("saved records = %d, want %d", got, want)
+	}
+	record := store.records[0]
+	if record.Site != command.Site || record.Source.Offset != rejected.Offset || record.Source.Raw != rejected.Raw || record.Reason != domainingestion.ReasonWatermarkPattern {
+		t.Fatalf("saved record = %#v", record)
+	}
+	if got, want := record.FoundAt, foundAt.UTC(); !got.Equal(want) || got.Location() != time.UTC {
+		t.Fatalf("found at = %v, want %v in UTC", got, want)
+	}
+}
+
+func TestServiceRunStopsOnQuarantineFailureWithPartialSummary(t *testing.T) {
+	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
+	if err != nil {
+		t.Fatalf("NewWatermarkPolicy() error = %v", err)
+	}
+	posts := &fakeRecordStream{results: []streamResult{
+		{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 19, "synthetic-marker", nil)},
+		{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 28, "clean", nil)},
+		{err: io.EOF},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
+	saveErr := errors.New("save failed")
+	store := &fakeQuarantineStore{err: saveErr}
+	service := NewService(&fakeArchiveFactory{archive: archive}, store, nil, watermark)
+	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
+
+	summary, err := service.Run(context.Background(), command)
+
+	if summary.Status != RunStatusFailed || len(summary.Tables) != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	table := summary.Tables[0]
+	if table.Processed != 1 || table.Rejected != 1 || table.Valid != 0 || table.LastOffset != 19 {
+		t.Fatalf("partial table summary = %#v", table)
+	}
+	if posts.index != 1 || len(store.records) != 1 {
+		t.Fatalf("processing continued after failure: stream index=%d saved=%d", posts.index, len(store.records))
+	}
+	var runErr RunError
+	if !errors.As(err, &runErr) || runErr.Table != "posts" || runErr.Offset != 19 || !errors.Is(err, saveErr) {
+		t.Fatalf("Run() error = %#v", err)
+	}
+}
+
+func TestServiceRunDryRunMakesNoQuarantineCalls(t *testing.T) {
+	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
+	if err != nil {
+		t.Fatalf("NewWatermarkPolicy() error = %v", err)
+	}
+	posts := &fakeRecordStream{results: []streamResult{
+		{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 8, "synthetic-marker", nil)},
+		{err: io.EOF},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
+	store := &fakeQuarantineStore{}
+	service := NewService(&fakeArchiveFactory{archive: archive}, store, nil, watermark)
+
+	summary, err := service.Run(context.Background(), testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, 100))
+
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if summary.Tables[0].Rejected != 1 || len(store.records) != 0 {
+		t.Fatalf("summary = %#v, saved records = %d", summary, len(store.records))
+	}
+}
+
 func testCommand(t *testing.T, tables []domainingestion.Table) Command {
 	return testCommandWithThreshold(t, tables, 0.5)
 }
 
 func testCommandWithThreshold(t *testing.T, tables []domainingestion.Table, threshold float64) Command {
+	return testCommandWithModeAndThreshold(t, tables, true, threshold)
+}
+
+func testCommandWithModeAndThreshold(t *testing.T, tables []domainingestion.Table, dryRun bool, threshold float64) Command {
 	t.Helper()
-	command, err := NewCommand(domainingestion.Site("stackoverflow.com"), "source.7z", tables, true, threshold, 1024, "")
+	command, err := NewCommand(domainingestion.Site("stackoverflow.com"), "source.7z", tables, dryRun, threshold, 1024, "")
 	if err != nil {
 		t.Fatalf("NewCommand() error = %v", err)
 	}

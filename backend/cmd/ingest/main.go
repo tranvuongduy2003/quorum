@@ -9,15 +9,20 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	postgresingestion "quorum/internal/adapter/repository/postgres/ingestion"
 	"quorum/internal/adapter/source/stackexchange"
 	domainingestion "quorum/internal/domain/ingestion"
+	"quorum/internal/infrastructure/config"
+	"quorum/internal/infrastructure/db"
 	usecaseingestion "quorum/internal/usecase/ingestion"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
 const MaxWatermarkPatternFileBytes = 1024 * 1024
+const postgresStartupTimeout = 5 * time.Second
 
 type options struct {
 	siteRaw, archivePath, tablesRaw, watermarkPatternsPath string
@@ -83,13 +88,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err != nil {
+		fmt.Fprintln(stderr, locateOptionError(err))
 		return 2
 	}
 
 	cmd, err := opts.command()
 	if err != nil {
-		runErr := locateOptionError(err)
-		fmt.Fprintln(stderr, runErr)
+		fmt.Fprintln(stderr, locateOptionError(err))
 		return 1
 	}
 
@@ -111,8 +116,35 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		policies = append(policies, policy)
 	}
 
+	var quarantine usecaseingestion.QuarantineStore
+	if !cmd.DryRun {
+		_, err := config.LoadEnvFile()
+		if err != nil {
+			fmt.Fprintln(stderr, locateOptionError(err))
+			return 1
+		}
+
+		postgresCfg, err := config.LoadPostgres()
+		if err != nil {
+			fmt.Fprintln(stderr, locateOptionError(err))
+			return 1
+		}
+
+		pgPoolCtx, cancel := context.WithTimeout(ctx, postgresStartupTimeout)
+		defer cancel()
+
+		pgPool, err := db.NewPostgresPool(pgPoolCtx, postgresCfg)
+		if err != nil {
+			fmt.Fprintln(stderr, locateOptionError(err))
+			return 1
+		}
+		defer pgPool.Close()
+
+		quarantine = postgresingestion.NewStore(pgPool)
+	}
+
 	factory := stackexchange.NewFactory()
-	service := usecaseingestion.NewService(factory, policies...)
+	service := usecaseingestion.NewService(factory, quarantine, time.Now, policies...)
 
 	summary, err := service.Run(ctx, cmd)
 	return writeRunResult(stdout, stderr, summary, err)
