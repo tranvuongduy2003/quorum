@@ -118,6 +118,29 @@ func TestServiceRunReturnsPartialMalformedSummary(t *testing.T) {
 	}
 }
 
+func TestServiceRunReportsObservedPercentageInPartialSummary(t *testing.T) {
+	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
+	if err != nil {
+		t.Fatalf("NewWatermarkPolicy() error = %v", err)
+	}
+	malformed := SourceError{Table: domainingestion.TablePosts, Offset: 21, Err: domainingestion.ErrMalformedRecord}
+	posts := &fakeRecordStream{results: []streamResult{
+		{record: domainingestion.NewSourceRecord(domainingestion.TablePosts, 5, "synthetic-marker", nil)},
+		{err: malformed},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
+	service := NewService(&fakeArchiveFactory{archive: archive}, nil, nil, watermark)
+
+	summary, runErr := service.Run(context.Background(), testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, 100))
+
+	if runErr == nil {
+		t.Fatal("Run() error = nil")
+	}
+	if summary.ObservedPercent != 50 {
+		t.Fatalf("ObservedPercent = %v, want 50", summary.ObservedPercent)
+	}
+}
+
 func TestServiceRunReturnsCompleteSummaryBeforeThresholdFailure(t *testing.T) {
 	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
 	if err != nil {

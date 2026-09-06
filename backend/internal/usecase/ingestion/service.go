@@ -60,13 +60,13 @@ func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, 
 		tSum, tableErr := s.processTable(ctx, archive, table, command)
 
 		summary.Tables = append(summary.Tables, tSum)
+		summary.ObservedPercent = summary.MaxRejectedPercent()
 
 		if tableErr != nil {
 			return summary.WithStatus(RunStatusFailed), tableErr
 		}
 	}
 
-	summary.ObservedPercent = summary.MaxRejectedPercent()
 	failingTable, exceeded := summary.FirstTableAbove(command.RejectThresholdPercent)
 	if exceeded {
 		summary.Status = RunStatusFailed

@@ -3,6 +3,7 @@ module quorum
 go 1.25.0
 
 require (
+	github.com/bodgit/sevenzip v1.6.5
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -13,7 +14,6 @@ require (
 require (
 	github.com/andybalholm/brotli v1.2.3 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
-	github.com/bodgit/sevenzip v1.6.5 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
