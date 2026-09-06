@@ -78,7 +78,7 @@ frontend-check:
 	cd frontend && npm run lint && npm run typecheck && npm run test -- --run
 
 migrate-ingest:
-	docker compose exec -T postgres psql -U app -d app -v ON_ERROR_STOP=1 -f /migrations/000001_ingest_quarantine.sql
+	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000001_ingest_quarantine.sql'
 
 quarantine-count:
-	@docker compose exec -T postgres psql -U app -d app -Atc "SELECT count(*) FROM ingest_quarantine;"
+	@docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atc "SELECT count(*) FROM ingest_quarantine;"'

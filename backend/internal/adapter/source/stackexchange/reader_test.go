@@ -12,14 +12,14 @@ import (
 )
 
 func TestRecordStreamPreservesRawAndTracksDecompressedOffsets(t *testing.T) {
-	input := "<?xml version=\"1.0\"?>\r\n<posts>\r\n  <row Id=\"1\" Title=\"Hello\" />\r\n</posts>"
+	input := "\ufeff<?xml version=\"1.0\"?>\r\n<posts>\r\n  <row Id=\"1\" Title=\"Hello\" />\r\n</posts>"
 	stream := newRecordStream(domainingestion.TablePosts, io.NopCloser(strings.NewReader(input)), 1024)
 
 	record, err := stream.Next(context.Background())
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
-	if want := int64(len("<?xml version=\"1.0\"?>\r\n<posts>\r\n")); record.Offset != want {
+	if want := int64(len("\ufeff<?xml version=\"1.0\"?>\r\n<posts>\r\n")); record.Offset != want {
 		t.Fatalf("Offset = %d, want %d", record.Offset, want)
 	}
 	if want := "  <row Id=\"1\" Title=\"Hello\" />"; record.Raw != want {

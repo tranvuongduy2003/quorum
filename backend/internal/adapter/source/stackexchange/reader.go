@@ -84,6 +84,9 @@ func (s *recordStream) Next(ctx context.Context) (domainingestion.SourceRecord, 
 		}
 
 		trimLine := bytes.TrimSpace(rawLine)
+		if lineOffset == 0 {
+			trimLine = bytes.TrimPrefix(trimLine, []byte{0xef, 0xbb, 0xbf})
+		}
 
 		if len(trimLine) == 0 || isXMLDeclaration(trimLine) || bytes.Equal(trimLine, rootOpening) || bytes.Equal(trimLine, rootClosing) {
 
