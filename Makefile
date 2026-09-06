@@ -31,7 +31,7 @@ ingest-help:
 	cd backend && go run ./cmd/ingest --help
 
 ingest-small:
-	cd backend && go run ./cmd/ingest --site academia.stackexchange.com
+	cd backend && go run ./cmd/ingest --site academia.stackexchange.com --archive ../data/academia.stackexchange.com.7z --tables posts --dry-run
 
 openapi:
 	cd backend && go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5 init --v3.1 -g openapi.go -d ./internal/adapter/http -o ./docs --ot yaml

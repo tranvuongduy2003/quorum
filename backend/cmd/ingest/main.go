@@ -88,19 +88,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if err != nil {
-		fmt.Fprintln(stderr, locateOptionError(err))
+		writeTerminalError(stderr, locateOptionError(err))
 		return 2
 	}
 
 	cmd, err := opts.command()
 	if err != nil {
-		fmt.Fprintln(stderr, locateOptionError(err))
+		writeTerminalError(stderr, locateOptionError(err))
 		return 1
 	}
 
 	patterns, err := loadWatermarkPatterns(cmd.WatermarkPatternsPath)
 	if err != nil {
-		fmt.Fprintln(stderr, locateOptionError(err))
+		writeTerminalError(stderr, locateOptionError(err))
 		return 1
 	}
 
@@ -110,7 +110,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(patterns) > 0 {
 		policy, policyErr := domainingestion.NewWatermarkPolicy(patterns)
 		if policyErr != nil {
-			fmt.Fprintln(stderr, locateOptionError(policyErr))
+			writeTerminalError(stderr, locateOptionError(policyErr))
 			return 1
 		}
 		policies = append(policies, policy)
@@ -120,13 +120,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !cmd.DryRun {
 		_, err := config.LoadEnvFile()
 		if err != nil {
-			fmt.Fprintln(stderr, locateOptionError(err))
+			writeTerminalError(stderr, locateOptionError(err))
 			return 1
 		}
 
 		postgresCfg, err := config.LoadPostgres()
 		if err != nil {
-			fmt.Fprintln(stderr, locateOptionError(err))
+			writeTerminalError(stderr, locateOptionError(err))
 			return 1
 		}
 
@@ -135,7 +135,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 		pgPool, err := db.NewPostgresPool(pgPoolCtx, postgresCfg)
 		if err != nil {
-			fmt.Fprintln(stderr, locateOptionError(err))
+			writeTerminalError(stderr, locateOptionError(err))
 			return 1
 		}
 		defer pgPool.Close()
@@ -155,12 +155,23 @@ func writeRunResult(stdout, stderr io.Writer, summary usecaseingestion.RunSummar
 		if len(summary.Tables) > 0 {
 			usecaseingestion.PrintSummary(stdout, summary)
 		}
-		fmt.Fprintln(stderr, err)
+		writeTerminalError(stderr, err)
 		return 1
 	}
 
 	usecaseingestion.PrintSummary(stdout, summary)
 	return 0
+}
+
+func writeTerminalError(w io.Writer, err error) {
+	var runErr usecaseingestion.RunError
+	if errors.As(err, &runErr) {
+		cause := strings.Join(strings.Fields(runErr.Err.Error()), " ")
+		fmt.Fprintf(w, "error table=%s offset=%d cause=%s\n", runErr.Table, runErr.Offset, cause)
+		return
+	}
+
+	fmt.Fprintln(w, strings.Join(strings.Fields(err.Error()), " "))
 }
 
 func loadWatermarkPatterns(path string) (patterns []string, err error) {
@@ -242,7 +253,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.Float64Var(&opts.rejectThresholdPercent, "reject-threshold", opts.rejectThresholdPercent, "Maximum rejected percentage allowed per table")
 
 	opts.watermarkPatternsPath = ""
-	flags.StringVar(&opts.watermarkPatternsPath, "watermark-patterns", opts.watermarkPatternsPath, "Optional UTF-8 file with one literal pattern per line")
+	flags.StringVar(&opts.watermarkPatternsPath, "watermark-patterns", opts.watermarkPatternsPath, "UTF-8 file with one literal pattern per line; empty disables watermark checks")
 
 	opts.maxRecordBytes = 8388608
 	flags.IntVar(&opts.maxRecordBytes, "max-record-bytes", opts.maxRecordBytes, "Maximum decompressed bytes allowed for one source row")

@@ -15,7 +15,7 @@ Designed as a single-deployable backend service that serves a Stack Overflow–s
 
 - `backend/cmd/api` — HTTP Server
 - `backend/cmd/worker` — Outbox relay + job consumers
-- `backend/cmd/ingest` — Bulk loader CLI
+- `backend/cmd/ingest` — Corpus intake CLI
 - `backend/cmd/verify` — Invariant checker
 - `backend/internal/domain/<capability>` — pure domain entities, value objects, and rules
 - `backend/internal/usecase/<capability>` — application services with their commands and consumer-owned ports
@@ -23,6 +23,12 @@ Designed as a single-deployable backend service that serves a Stack Overflow–s
 - `backend/internal/infrastructure/` — configuration, clients, logging, and dependency injection
 - `frontend/` — React frontend application using Vite and TypeScript
 - `test/` — Playwright API integration and browser end-to-end project
+
+## Corpus intake
+
+Supply Stack Exchange archives at `data/<site>.7z` or pass an explicit path with `--archive`. Run `make ingest-help` to see every option and default. Run `make ingest-small` to inspect the `posts` table in `data/academia.stackexchange.com.7z` with dry-run enabled.
+
+Dry-run writes neither corpus nor quarantine data. Non-dry intake retains rejected rows in quarantine only; it does not load accepted corpus data. Operators are responsible for supplying archives, and archives and extracted data must never be committed to this repository.
 
 ## Validation
 
