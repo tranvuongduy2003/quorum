@@ -144,6 +144,113 @@ func TestStoreWriteQuarantineOnlyConfirmsAfterCommit(t *testing.T) {
 	if tx.commits != 1 || tx.rollbacks != 1 {
 		t.Fatalf("transaction calls = commits:%d rollbacks:%d", tx.commits, tx.rollbacks)
 	}
+	assertWriteFailure(t, err, 15, commitErr)
+}
+
+func TestStoreWriteAcceptedLocatesMapperFailure(t *testing.T) {
+	tx := &fakeCopyTransaction{}
+	store := Store{pool: &fakeTransactionStarter{tx: tx}}
+	records := []domainingestion.SourceRecord{validVoteRecord(1, 10), validVoteRecord(2, 20)}
+	records[1].Attributes["Id"] = "invalid"
+
+	count, err := store.WriteAccepted(context.Background(), domainingestion.Site("stackoverflow.com"), domainingestion.TableVotes, records)
+
+	if count != 0 || !errors.Is(err, ErrInvalidWriteAttribute) || errors.Is(err, availability.ErrUnavailable) {
+		t.Fatalf("WriteAccepted() = %d, %v", count, err)
+	}
+	assertWriteFailure(t, err, 20, ErrInvalidWriteAttribute)
+	if tx.commits != 0 || tx.rollbacks != 1 {
+		t.Fatalf("transaction calls = commits:%d rollbacks:%d", tx.commits, tx.rollbacks)
+	}
+}
+
+func TestStoreWriteAcceptedLocatesPostgresCopyLine(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "23514", Message: "check violation", Where: "COPY votes, line 2, column id"}
+	tx := &fakeCopyTransaction{copyErrors: []error{pgErr}}
+	store := Store{pool: &fakeTransactionStarter{tx: tx}}
+	records := []domainingestion.SourceRecord{validVoteRecord(1, 47), validVoteRecord(2, 133)}
+
+	count, err := store.WriteAccepted(context.Background(), domainingestion.Site("stackoverflow.com"), domainingestion.TableVotes, records)
+
+	if count != 0 || !errors.Is(err, usecaseingestion.ErrWriteRejected) || !errors.Is(err, pgErr) {
+		t.Fatalf("WriteAccepted() = %d, %v", count, err)
+	}
+	assertWriteFailure(t, err, 133, pgErr)
+	if tx.commits != 0 || tx.rollbacks != 1 {
+		t.Fatalf("transaction calls = commits:%d rollbacks:%d", tx.commits, tx.rollbacks)
+	}
+}
+
+func TestStoreWriteQuarantineLocatesPostgresCopyLine(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "23514", Message: "check violation", Where: "COPY ingest_quarantine, line 1, column source_offset"}
+	tx := &fakeCopyTransaction{copyErrors: []error{pgErr}}
+	store := Store{pool: &fakeTransactionStarter{tx: tx}}
+	records := []domainingestion.QuarantineRecord{
+		domainingestion.NewQuarantineRecord(domainingestion.Site("stackoverflow.com"), domainingestion.NewSourceRecord(domainingestion.TablePosts, 47, "first", nil), domainingestion.ReasonWatermarkPattern, time.Unix(1, 0)),
+		domainingestion.NewQuarantineRecord(domainingestion.Site("stackoverflow.com"), domainingestion.NewSourceRecord(domainingestion.TablePosts, 133, "second", nil), domainingestion.ReasonWatermarkPattern, time.Unix(2, 0)),
+	}
+
+	count, err := store.WriteQuarantine(context.Background(), records)
+
+	if count != 0 || !errors.Is(err, usecaseingestion.ErrWriteRejected) || !errors.Is(err, pgErr) {
+		t.Fatalf("WriteQuarantine() = %d, %v", count, err)
+	}
+	assertWriteFailure(t, err, 47, pgErr)
+}
+
+func TestLocateCopyFailureUsesPreciseAndFallbackOffsets(t *testing.T) {
+	offsets := []int64{47, 91, 133}
+	tests := []struct {
+		name  string
+		where string
+		want  int64
+	}{
+		{name: "first", where: "COPY votes, line 1, column id", want: 47},
+		{name: "middle", where: "COPY votes, line 2, column id", want: 91},
+		{name: "last", where: "COPY votes, line 3, column id", want: 133},
+		{name: "missing", want: 133},
+		{name: "zero", where: "COPY votes, line 0, column id", want: 133},
+		{name: "negative", where: "COPY votes, line -1, column id", want: 133},
+		{name: "malformed", where: "COPY votes, line many, column id", want: 133},
+		{name: "out of range", where: "COPY votes, line 4, column id", want: 133},
+		{name: "unrelated number", where: "COPY votes, code 2", want: 133},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pgErr := &pgconn.PgError{Code: "23514", Message: "check violation", Where: test.where}
+			err := locateCopyFailure(len(offsets), func(index int) int64 { return offsets[index] }, pgErr)
+
+			if !errors.Is(err, usecaseingestion.ErrWriteRejected) {
+				t.Fatalf("locateCopyFailure() error = %v", err)
+			}
+			assertWriteFailure(t, err, test.want, pgErr)
+		})
+	}
+}
+
+func TestStoreWriteFailuresUseLastBatchOffsetWithoutCopyLine(t *testing.T) {
+	beginErr := errors.New("begin failed")
+	records := []domainingestion.SourceRecord{validVoteRecord(1, 47), validVoteRecord(2, 133)}
+	store := Store{pool: &fakeTransactionStarter{err: beginErr}}
+
+	_, err := store.WriteAccepted(context.Background(), domainingestion.Site("stackoverflow.com"), domainingestion.TableVotes, records)
+
+	if !errors.Is(err, availability.ErrUnavailable) {
+		t.Fatalf("WriteAccepted() error = %v", err)
+	}
+	assertWriteFailure(t, err, 133, beginErr)
+
+	canceled := fmt.Errorf("copy canceled: %w", context.Canceled)
+	tx := &fakeCopyTransaction{copyErrors: []error{canceled}}
+	store = Store{pool: &fakeTransactionStarter{tx: tx}}
+
+	_, err = store.WriteAccepted(context.Background(), domainingestion.Site("stackoverflow.com"), domainingestion.TableVotes, records)
+
+	if !errors.Is(err, context.Canceled) || errors.Is(err, availability.ErrUnavailable) {
+		t.Fatalf("WriteAccepted() cancellation = %v", err)
+	}
+	assertWriteFailure(t, err, 133, context.Canceled)
 }
 
 func TestStoreWritesPreserveContextCancellation(t *testing.T) {
@@ -220,4 +327,18 @@ func validVoteRecord(id int64, offset int64) domainingestion.SourceRecord {
 		"VoteTypeId":   "2",
 		"CreationDate": "2026-01-02T03:04:05.006",
 	})
+}
+
+func assertWriteFailure(t *testing.T, err error, offset int64, cause error) {
+	t.Helper()
+	var failure usecaseingestion.WriteFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error %v does not contain WriteFailure", err)
+	}
+	if failure.Offset != offset {
+		t.Fatalf("WriteFailure offset = %d, want %d", failure.Offset, offset)
+	}
+	if !errors.Is(failure.Err, cause) {
+		t.Fatalf("WriteFailure error = %v, want cause %v", failure.Err, cause)
+	}
 }

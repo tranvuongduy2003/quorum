@@ -373,6 +373,32 @@ func TestServiceRunPreservesAcceptedConfirmationWhenQuarantineFails(t *testing.T
 	}
 }
 
+func TestServiceRunUsesWriterFailureOffsetAndPreservesCause(t *testing.T) {
+	stream := &fakeRecordStream{results: []streamResult{
+		{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, 47, "first", nil)},
+		{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, 133, "second", nil)},
+		{err: io.EOF},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TableVotes: stream}}
+	cause := errors.New("rejected row")
+	writer := &fakeWriter{acceptedResults: []writerResult{{err: WriteFailure{Offset: 47, Err: cause}}}}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil)
+
+	summary, err := service.Run(context.Background(), testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TableVotes}, false, 100))
+
+	if summary.Status != RunStatusFailed || len(summary.Tables) != 1 || summary.Tables[0].Confirmed != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	var runErr RunError
+	if !errors.As(err, &runErr) || runErr.Table != "votes" || runErr.Offset != 47 || !errors.Is(err, cause) {
+		t.Fatalf("Run() error = %#v", err)
+	}
+	var failure WriteFailure
+	if errors.As(err, &failure) {
+		t.Fatalf("Run() leaked WriteFailure = %#v", failure)
+	}
+}
+
 func TestServiceRunRejectsWriterCountMismatchWithoutConfirmation(t *testing.T) {
 	stream := &fakeRecordStream{results: []streamResult{
 		{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, 41, "clean", nil)},

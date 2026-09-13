@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	domainingestion "quorum/internal/domain/ingestion"
 	"quorum/internal/usecase/availability"
@@ -13,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var copyLinePattern = regexp.MustCompile(`\bline ([1-9][0-9]*)\b`)
 
 var _ usecaseingestion.Writer = Store{}
 
@@ -73,14 +77,17 @@ func (s Store) WriteAccepted(
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, classifyWriteError(err)
+		return 0, usecaseingestion.WriteFailure{
+			Offset: records[len(records)-1].Offset,
+			Err:    classifyWriteError(err),
+		}
 	}
 	defer tx.Rollback(ctx)
 
 	for _, plan := range plans {
 		count, err := copyAcceptedDestination(ctx, tx, plan, site, records)
 		if err != nil {
-			return 0, classifyWriteError(err)
+			return 0, err
 		}
 
 		if count != int64(len(records)) {
@@ -89,7 +96,10 @@ func (s Store) WriteAccepted(
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, classifyWriteError(err)
+		return 0, usecaseingestion.WriteFailure{
+			Offset: records[len(records)-1].Offset,
+			Err:    classifyWriteError(err),
+		}
 	}
 
 	return int64(len(records)), nil
@@ -106,13 +116,16 @@ func (s Store) WriteQuarantine(ctx context.Context, records []domainingestion.Qu
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, classifyWriteError(err)
+		return 0, usecaseingestion.WriteFailure{
+			Offset: records[len(records)-1].Source.Offset,
+			Err:    classifyWriteError(err),
+		}
 	}
 	defer tx.Rollback(ctx)
 
 	copied, err := copyQuarantineDestination(ctx, tx, quarantinePlan, records)
 	if err != nil {
-		return 0, classifyWriteError(err)
+		return 0, err
 	}
 
 	if copied != int64(len(records)) {
@@ -120,7 +133,10 @@ func (s Store) WriteQuarantine(ctx context.Context, records []domainingestion.Qu
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, classifyWriteError(err)
+		return 0, usecaseingestion.WriteFailure{
+			Offset: records[len(records)-1].Source.Offset,
+			Err:    classifyWriteError(err),
+		}
 	}
 
 	return copied, nil
@@ -134,10 +150,22 @@ func copyAcceptedDestination(
 	records []domainingestion.SourceRecord,
 ) (int64, error) {
 	source := pgx.CopyFromSlice(len(records), func(index int) ([]any, error) {
-		return plan.Map(site, records[index])
+		record := records[index]
+		mapped, err := plan.Map(site, record)
+		if err != nil {
+			return nil, usecaseingestion.WriteFailure{Offset: record.Offset, Err: err}
+		}
+
+		return mapped, nil
 	})
 
-	return tx.CopyFrom(ctx, plan.Table, plan.Columns, source)
+	count, err := tx.CopyFrom(ctx, plan.Table, plan.Columns, source)
+	if err != nil {
+		copyErr := locateCopyFailure(len(records), func(index int) int64 { return records[index].Offset }, err)
+		return 0, copyErr
+	}
+
+	return count, nil
 }
 
 func copyQuarantineDestination(ctx context.Context, tx copyTransaction, plan destinationPlan, records []domainingestion.QuarantineRecord) (int64, error) {
@@ -145,7 +173,13 @@ func copyQuarantineDestination(ctx context.Context, tx copyTransaction, plan des
 		return mapQuarantineRow(records[index]), nil
 	})
 
-	return tx.CopyFrom(ctx, plan.Table, plan.Columns, source)
+	count, err := tx.CopyFrom(ctx, plan.Table, plan.Columns, source)
+	if err != nil {
+		copyErr := locateCopyFailure(len(records), func(index int) int64 { return records[index].Source.Offset }, err)
+		return 0, copyErr
+	}
+
+	return count, nil
 }
 
 func classifyWriteError(err error) error {
@@ -163,4 +197,37 @@ func classifyWriteError(err error) error {
 	}
 
 	return fmt.Errorf("%w: %w", availability.ErrUnavailable, err)
+}
+
+func locateCopyFailure(length int, offsetAt func(int) int64, err error) error {
+	var writeErr usecaseingestion.WriteFailure
+	if errors.As(err, &writeErr) {
+		return err
+	}
+
+	fallbackOffset := offsetAt(length - 1)
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return usecaseingestion.WriteFailure{
+			Offset: fallbackOffset,
+			Err:    classifyWriteError(err),
+		}
+	}
+
+	targetOffset := fallbackOffset
+	if pgErr.Where != "" {
+		matches := copyLinePattern.FindStringSubmatch(pgErr.Where)
+		if len(matches) > 1 {
+			line, parseErr := strconv.Atoi(matches[1])
+			if parseErr == nil && line >= 1 && line <= length {
+				targetOffset = offsetAt(line - 1)
+			}
+		}
+	}
+
+	return usecaseingestion.WriteFailure{
+		Offset: targetOffset,
+		Err:    classifyWriteError(err),
+	}
 }

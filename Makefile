@@ -1,4 +1,4 @@
-.PHONY: up down api worker ingest-help ingest-small verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy quarantine-count
+.PHONY: up down api worker ingest-help ingest-small guard-ingest-writes verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy quarantine-count
 
 up:
 	docker compose up -d
@@ -32,6 +32,9 @@ ingest-help:
 
 ingest-small:
 	cd backend && go run ./cmd/ingest --site academia.stackexchange.com --archive ../data/academia.stackexchange.com.7z --tables posts --dry-run
+
+guard-ingest-writes:
+	cd backend && go run ./cmd/guardingest
 
 openapi:
 	cd backend && go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5 init --v3.1 -g openapi.go -d ./internal/adapter/http -o ./docs --ot yaml

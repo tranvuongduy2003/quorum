@@ -232,18 +232,20 @@ func (s Service) flushPending(
 		count, err := s.writer.WriteAccepted(ctx, site, table, pending.accepted)
 
 		if err != nil {
+			failureOffset, failureErr := writeFailure(err, offset)
 			return RunError{
 				Table:  table.String(),
-				Offset: offset,
-				Err:    err,
+				Offset: failureOffset,
+				Err:    failureErr,
 			}
 		}
 
 		if count != int64(len(pending.accepted)) {
+			failureOffset, failureErr := writeFailure(ErrWriteCountMismatch, offset)
 			return RunError{
 				Table:  table.String(),
-				Offset: offset,
-				Err:    ErrWriteCountMismatch,
+				Offset: failureOffset,
+				Err:    failureErr,
 			}
 		}
 
@@ -255,18 +257,20 @@ func (s Service) flushPending(
 		count, err := s.writer.WriteQuarantine(ctx, pending.quarantine)
 
 		if err != nil {
+			failureOffset, failureErr := writeFailure(err, offset)
 			return RunError{
 				Table:  table.String(),
-				Offset: offset,
-				Err:    err,
+				Offset: failureOffset,
+				Err:    failureErr,
 			}
 		}
 
 		if count != int64(len(pending.quarantine)) {
+			failureOffset, failureErr := writeFailure(ErrWriteCountMismatch, offset)
 			return RunError{
 				Table:  table.String(),
-				Offset: offset,
-				Err:    ErrWriteCountMismatch,
+				Offset: failureOffset,
+				Err:    failureErr,
 			}
 		}
 
@@ -308,4 +312,13 @@ func (p *pendingWrites) reset() {
 	p.accepted = p.accepted[:0]
 	p.quarantine = p.quarantine[:0]
 	p.rawBytes = 0
+}
+
+func writeFailure(err error, fallback int64) (int64, error) {
+	var writeErr WriteFailure
+	if errors.As(err, &writeErr) {
+		return writeErr.Offset, writeErr.Err
+	}
+
+	return fallback, err
 }

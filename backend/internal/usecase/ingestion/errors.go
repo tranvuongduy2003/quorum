@@ -52,3 +52,16 @@ func (e SourceError) Error() string {
 func (e SourceError) Unwrap() error {
 	return e.Err
 }
+
+type WriteFailure struct {
+	Offset int64
+	Err    error
+}
+
+func (e WriteFailure) Error() string {
+	return e.Err.Error()
+}
+
+func (e WriteFailure) Unwrap() error {
+	return e.Err
+}
