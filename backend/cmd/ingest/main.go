@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		policies = append(policies, policy)
 	}
 
-	var quarantine usecaseingestion.QuarantineStore
+	var writer usecaseingestion.Writer
 	if !cmd.DryRun {
 		_, err := config.LoadEnvFile()
 		if err != nil {
@@ -135,16 +135,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 		pgPool, err := db.NewPostgresPool(pgPoolCtx, postgresCfg)
 		if err != nil {
-			writeTerminalError(stderr, locateOptionError(err))
+			writeTerminalError(stderr, usecaseingestion.RunError{
+				Table:  cmd.Tables[0].String(),
+				Offset: 0,
+				Err:    err,
+			})
 			return 1
 		}
 		defer pgPool.Close()
 
-		quarantine = postgresingestion.NewStore(pgPool)
+		writer = postgresingestion.NewStore(pgPool)
 	}
 
 	factory := stackexchange.NewFactory()
-	service := usecaseingestion.NewService(factory, quarantine, time.Now, policies...)
+	service := usecaseingestion.NewService(factory, writer, time.Now, policies...)
 
 	summary, err := service.Run(ctx, cmd)
 	return writeRunResult(stdout, stderr, summary, err)
@@ -247,7 +251,7 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 	flags.StringVar(&opts.tablesRaw, "tables", opts.tablesRaw, "Comma-separated canonical table subset")
 
 	opts.dryRun = false
-	flags.BoolVar(&opts.dryRun, "dry-run", opts.dryRun, "Inspect and report without persisting quarantine records")
+	flags.BoolVar(&opts.dryRun, "dry-run", opts.dryRun, "Inspect and report without persisting corpus or quarantine records")
 
 	opts.rejectThresholdPercent = 0.5
 	flags.Float64Var(&opts.rejectThresholdPercent, "reject-threshold", opts.rejectThresholdPercent, "Maximum rejected percentage allowed per table")

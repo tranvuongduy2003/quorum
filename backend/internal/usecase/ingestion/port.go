@@ -20,6 +20,7 @@ type RecordStream interface {
 	Close() error
 }
 
-type QuarantineStore interface {
-	Save(ctx context.Context, record domainingestion.QuarantineRecord) error
+type Writer interface {
+	WriteAccepted(context.Context, domainingestion.Site, domainingestion.Table, []domainingestion.SourceRecord) (int64, error)
+	WriteQuarantine(context.Context, []domainingestion.QuarantineRecord) (int64, error)
 }

@@ -90,6 +90,19 @@ var acceptedPlans = map[domainingestion.Table][]destinationPlan{
 	},
 }
 
+var quarantinePlan = destinationPlan{
+	Table: pgx.Identifier{"ingest_quarantine"},
+	Columns: []string{
+		"site",
+		"source_table",
+		"source_offset",
+		"raw_row",
+		"reason_code",
+		"found_at",
+	},
+	Map: nil,
+}
+
 func requiredText(record domainingestion.SourceRecord, name string) (string, error) {
 	value, ok := record.Attributes[name]
 	if !ok {
@@ -718,4 +731,15 @@ func mapPostHistory(site domainingestion.Site, record domainingestion.SourceReco
 		contentLicense,
 		record.Offset,
 	}, nil
+}
+
+func mapQuarantineRow(record domainingestion.QuarantineRecord) []any {
+	return []any{
+		record.Site.String(),
+		record.Source.Table.String(),
+		record.Source.Offset,
+		record.Source.Raw,
+		string(record.Reason),
+		record.FoundAt,
+	}
 }

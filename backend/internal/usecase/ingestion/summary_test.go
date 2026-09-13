@@ -16,6 +16,7 @@ func TestPrintSummarySortsRejectionReasons(t *testing.T) {
 				Processed: 3,
 				Valid:     1,
 				Rejected:  2,
+				Confirmed: 3,
 				Rejections: map[domainingestion.ReasonCode]int64{
 					domainingestion.ReasonWatermarkPattern: 1,
 					domainingestion.ReasonInvalidTimestamp: 1,
@@ -30,7 +31,7 @@ func TestPrintSummarySortsRejectionReasons(t *testing.T) {
 
 	PrintSummary(&output, summary)
 
-	want := "table=posts processed=3 valid=1 rejected=2 malformed=0\n" +
+	want := "table=posts processed=3 valid=1 rejected=2 malformed=0 confirmed=3\n" +
 		"rejection table=posts reason=invalid_timestamp count=1\n" +
 		"rejection table=posts reason=watermark_pattern count=1\n" +
 		"status=ok dry_run=true threshold_percent=100.0000 observed_percent=0.0000\n"

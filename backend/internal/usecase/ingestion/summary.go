@@ -18,6 +18,7 @@ type TableSummary struct {
 	Valid      int64
 	Rejected   int64
 	Malformed  int64
+	Confirmed  int64
 	Rejections map[domainingestion.ReasonCode]int64
 	LastOffset int64
 }
@@ -65,8 +66,8 @@ func (s RunSummary) WithStatus(status RunStatus) RunSummary {
 }
 func PrintSummary(w io.Writer, summary RunSummary) {
 	for _, t := range summary.Tables {
-		fmt.Fprintf(w, "table=%v processed=%d valid=%d rejected=%d malformed=%d\n",
-			t.Table, t.Processed, t.Valid, t.Rejected, t.Malformed)
+		fmt.Fprintf(w, "table=%v processed=%d valid=%d rejected=%d malformed=%d confirmed=%d\n",
+			t.Table, t.Processed, t.Valid, t.Rejected, t.Malformed, t.Confirmed)
 
 		reasons := make([]string, 0, len(t.Rejections))
 		for reason := range t.Rejections {

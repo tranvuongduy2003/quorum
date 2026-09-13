@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,14 +59,34 @@ type fakeArchiveFactory struct {
 	opened  bool
 }
 
-type fakeQuarantineStore struct {
-	records []domainingestion.QuarantineRecord
-	err     error
+type writerResult struct {
+	count int64
+	err   error
 }
 
-func (s *fakeQuarantineStore) Save(_ context.Context, record domainingestion.QuarantineRecord) error {
-	s.records = append(s.records, record)
-	return s.err
+type fakeWriter struct {
+	accepted         [][]domainingestion.SourceRecord
+	quarantine       [][]domainingestion.QuarantineRecord
+	acceptedResults  []writerResult
+	quarantineResult []writerResult
+}
+
+func (w *fakeWriter) WriteAccepted(_ context.Context, _ domainingestion.Site, _ domainingestion.Table, records []domainingestion.SourceRecord) (int64, error) {
+	w.accepted = append(w.accepted, append([]domainingestion.SourceRecord(nil), records...))
+	index := len(w.accepted) - 1
+	if index < len(w.acceptedResults) {
+		return w.acceptedResults[index].count, w.acceptedResults[index].err
+	}
+	return int64(len(records)), nil
+}
+
+func (w *fakeWriter) WriteQuarantine(_ context.Context, records []domainingestion.QuarantineRecord) (int64, error) {
+	w.quarantine = append(w.quarantine, append([]domainingestion.QuarantineRecord(nil), records...))
+	index := len(w.quarantine) - 1
+	if index < len(w.quarantineResult) {
+		return w.quarantineResult[index].count, w.quarantineResult[index].err
+	}
+	return int64(len(records)), nil
 }
 
 func (f *fakeArchiveFactory) Open(string) (Archive, error) {
@@ -259,7 +280,7 @@ func TestServiceRunDoesNotOpenArchiveAfterCancellation(t *testing.T) {
 	}
 }
 
-func TestServiceRunRequiresQuarantineStoreBeforeOpeningArchive(t *testing.T) {
+func TestServiceRunRequiresWriterBeforeOpeningArchive(t *testing.T) {
 	factory := &fakeArchiveFactory{archive: &fakeArchive{}}
 	service := NewService(factory, nil, nil)
 	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
@@ -267,18 +288,18 @@ func TestServiceRunRequiresQuarantineStoreBeforeOpeningArchive(t *testing.T) {
 	summary, err := service.Run(context.Background(), command)
 
 	if factory.opened {
-		t.Fatal("Run() opened an archive without a quarantine store")
+		t.Fatal("Run() opened an archive without a writer")
 	}
 	if summary.Status != RunStatusFailed {
 		t.Fatalf("summary status = %q, want %q", summary.Status, RunStatusFailed)
 	}
 	var runErr RunError
-	if !errors.As(err, &runErr) || runErr.Table != "request" || runErr.Offset != 0 || !errors.Is(err, ErrQuarantineStoreRequired) {
+	if !errors.As(err, &runErr) || runErr.Table != "request" || runErr.Offset != 0 || !errors.Is(err, ErrWriterRequired) {
 		t.Fatalf("Run() error = %#v", err)
 	}
 }
 
-func TestServiceRunPersistsOnlyRejectedRecordsWithCurrentTime(t *testing.T) {
+func TestServiceRunRoutesAcceptedAndRejectedRecordsAndConfirmsSourceCount(t *testing.T) {
 	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
 	if err != nil {
 		t.Fatalf("NewWatermarkPolicy() error = %v", err)
@@ -290,9 +311,9 @@ func TestServiceRunPersistsOnlyRejectedRecordsWithCurrentTime(t *testing.T) {
 		{err: io.EOF},
 	}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
-	store := &fakeQuarantineStore{}
+	writer := &fakeWriter{}
 	foundAt := time.Date(2026, time.September, 6, 10, 30, 0, 0, time.FixedZone("ICT", 7*60*60))
-	service := NewService(&fakeArchiveFactory{archive: archive}, store, func() time.Time { return foundAt }, watermark)
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, func() time.Time { return foundAt }, watermark)
 	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
 
 	summary, err := service.Run(context.Background(), command)
@@ -300,13 +321,16 @@ func TestServiceRunPersistsOnlyRejectedRecordsWithCurrentTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if summary.Tables[0].Rejected != 1 || summary.Tables[0].Valid != 1 {
+	if summary.Tables[0].Rejected != 1 || summary.Tables[0].Valid != 1 || summary.Tables[0].Confirmed != 2 {
 		t.Fatalf("table summary = %#v", summary.Tables[0])
 	}
-	if got, want := len(store.records), 1; got != want {
-		t.Fatalf("saved records = %d, want %d", got, want)
+	if len(writer.accepted) != 1 || len(writer.accepted[0]) != 1 || writer.accepted[0][0].Offset != 16 {
+		t.Fatalf("accepted batches = %#v", writer.accepted)
 	}
-	record := store.records[0]
+	if len(writer.quarantine) != 1 || len(writer.quarantine[0]) != 1 {
+		t.Fatalf("quarantine batches = %#v", writer.quarantine)
+	}
+	record := writer.quarantine[0][0]
 	if record.Site != command.Site || record.Source.Offset != rejected.Offset || record.Source.Raw != rejected.Raw || record.Reason != domainingestion.ReasonWatermarkPattern {
 		t.Fatalf("saved record = %#v", record)
 	}
@@ -315,7 +339,7 @@ func TestServiceRunPersistsOnlyRejectedRecordsWithCurrentTime(t *testing.T) {
 	}
 }
 
-func TestServiceRunStopsOnQuarantineFailureWithPartialSummary(t *testing.T) {
+func TestServiceRunPreservesAcceptedConfirmationWhenQuarantineFails(t *testing.T) {
 	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
 	if err != nil {
 		t.Fatalf("NewWatermarkPolicy() error = %v", err)
@@ -327,8 +351,8 @@ func TestServiceRunStopsOnQuarantineFailureWithPartialSummary(t *testing.T) {
 	}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
 	saveErr := errors.New("save failed")
-	store := &fakeQuarantineStore{err: saveErr}
-	service := NewService(&fakeArchiveFactory{archive: archive}, store, nil, watermark)
+	writer := &fakeWriter{quarantineResult: []writerResult{{err: saveErr}}}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil, watermark)
 	command := testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, false, 100)
 
 	summary, err := service.Run(context.Background(), command)
@@ -337,11 +361,11 @@ func TestServiceRunStopsOnQuarantineFailureWithPartialSummary(t *testing.T) {
 		t.Fatalf("summary = %#v", summary)
 	}
 	table := summary.Tables[0]
-	if table.Processed != 1 || table.Rejected != 1 || table.Valid != 0 || table.LastOffset != 19 {
+	if table.Processed != 2 || table.Rejected != 1 || table.Valid != 1 || table.Confirmed != 1 || table.LastOffset != 28 {
 		t.Fatalf("partial table summary = %#v", table)
 	}
-	if posts.index != 1 || len(store.records) != 1 {
-		t.Fatalf("processing continued after failure: stream index=%d saved=%d", posts.index, len(store.records))
+	if posts.index != len(posts.results) || len(writer.accepted) != 1 || len(writer.quarantine) != 1 {
+		t.Fatalf("write boundary = stream:%d/%d accepted:%d quarantine:%d", posts.index, len(posts.results), len(writer.accepted), len(writer.quarantine))
 	}
 	var runErr RunError
 	if !errors.As(err, &runErr) || runErr.Table != "posts" || runErr.Offset != 19 || !errors.Is(err, saveErr) {
@@ -349,7 +373,27 @@ func TestServiceRunStopsOnQuarantineFailureWithPartialSummary(t *testing.T) {
 	}
 }
 
-func TestServiceRunDryRunMakesNoQuarantineCalls(t *testing.T) {
+func TestServiceRunRejectsWriterCountMismatchWithoutConfirmation(t *testing.T) {
+	stream := &fakeRecordStream{results: []streamResult{
+		{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, 41, "clean", nil)},
+		{err: io.EOF},
+	}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TableVotes: stream}}
+	writer := &fakeWriter{acceptedResults: []writerResult{{count: 0}}}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil)
+
+	summary, err := service.Run(context.Background(), testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TableVotes}, false, 100))
+
+	if len(summary.Tables) != 1 || summary.Tables[0].Confirmed != 0 || summary.Status != RunStatusFailed {
+		t.Fatalf("summary = %#v", summary)
+	}
+	var runErr RunError
+	if !errors.As(err, &runErr) || runErr.Table != "votes" || runErr.Offset != 41 || !errors.Is(err, ErrWriteCountMismatch) {
+		t.Fatalf("Run() error = %#v", err)
+	}
+}
+
+func TestServiceRunDryRunMakesNoWriterCalls(t *testing.T) {
 	watermark, err := domainingestion.NewWatermarkPolicy([]string{"synthetic-marker"})
 	if err != nil {
 		t.Fatalf("NewWatermarkPolicy() error = %v", err)
@@ -359,17 +403,76 @@ func TestServiceRunDryRunMakesNoQuarantineCalls(t *testing.T) {
 		{err: io.EOF},
 	}}
 	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TablePosts: posts}}
-	store := &fakeQuarantineStore{}
-	service := NewService(&fakeArchiveFactory{archive: archive}, store, nil, watermark)
+	writer := &fakeWriter{}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil, watermark)
 
 	summary, err := service.Run(context.Background(), testCommandWithThreshold(t, []domainingestion.Table{domainingestion.TablePosts}, 100))
 
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if summary.Tables[0].Rejected != 1 || len(store.records) != 0 {
-		t.Fatalf("summary = %#v, saved records = %d", summary, len(store.records))
+	if summary.Tables[0].Rejected != 1 || summary.Tables[0].Confirmed != 0 || len(writer.accepted) != 0 || len(writer.quarantine) != 0 {
+		t.Fatalf("summary = %#v, accepted calls = %d, quarantine calls = %d", summary, len(writer.accepted), len(writer.quarantine))
 	}
+}
+
+func TestServiceRunFlushesAtRowBoundary(t *testing.T) {
+	results := make([]streamResult, 0, copyBatchRows+2)
+	for offset := int64(1); offset <= copyBatchRows+1; offset++ {
+		results = append(results, streamResult{record: domainingestion.NewSourceRecord(domainingestion.TableVotes, offset, "x", nil)})
+	}
+	results = append(results, streamResult{err: io.EOF})
+	stream := &fakeRecordStream{results: results}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TableVotes: stream}}
+	writer := &fakeWriter{}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil)
+
+	summary, err := service.Run(context.Background(), testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TableVotes}, false, 100))
+
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(writer.accepted) != 2 || len(writer.accepted[0]) != copyBatchRows || len(writer.accepted[1]) != 1 {
+		t.Fatalf("accepted batch sizes = %v", acceptedBatchSizes(writer.accepted))
+	}
+	if summary.Tables[0].Confirmed != copyBatchRows+1 {
+		t.Fatalf("confirmed = %d, want %d", summary.Tables[0].Confirmed, copyBatchRows+1)
+	}
+}
+
+func TestServiceRunFlushesSingleOversizedRecordOnce(t *testing.T) {
+	record := domainingestion.NewSourceRecord(domainingestion.TableVotes, 1, strings.Repeat("x", int(copyBatchRawBytes)+1), nil)
+	stream := &fakeRecordStream{results: []streamResult{{record: record}, {err: io.EOF}}}
+	archive := &fakeArchive{streams: map[domainingestion.Table]*fakeRecordStream{domainingestion.TableVotes: stream}}
+	writer := &fakeWriter{}
+	service := NewService(&fakeArchiveFactory{archive: archive}, writer, nil)
+
+	summary, err := service.Run(context.Background(), testCommandWithModeAndThreshold(t, []domainingestion.Table{domainingestion.TableVotes}, false, 100))
+
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(writer.accepted) != 1 || len(writer.accepted[0]) != 1 || summary.Tables[0].Confirmed != 1 {
+		t.Fatalf("writes = batches:%v summary:%#v", acceptedBatchSizes(writer.accepted), summary.Tables[0])
+	}
+}
+
+func TestPendingWritesFlushesBeforeByteLimitOverflow(t *testing.T) {
+	pending := pendingWrites{accepted: []domainingestion.SourceRecord{{}}, rawBytes: copyBatchRawBytes - 1}
+	if pending.shouldFlush(domainingestion.NewSourceRecord(domainingestion.TableVotes, 1, "xx", nil)) != true {
+		t.Fatal("shouldFlush() = false at byte overflow")
+	}
+	if pending.shouldFlush(domainingestion.NewSourceRecord(domainingestion.TableVotes, 1, "x", nil)) {
+		t.Fatal("shouldFlush() = true at exact byte limit")
+	}
+}
+
+func acceptedBatchSizes(batches [][]domainingestion.SourceRecord) []int {
+	sizes := make([]int, len(batches))
+	for index, batch := range batches {
+		sizes[index] = len(batch)
+	}
+	return sizes
 }
 
 func testCommand(t *testing.T, tables []domainingestion.Table) Command {

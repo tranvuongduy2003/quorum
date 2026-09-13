@@ -182,6 +182,7 @@ func TestWriteRunResultPrintsCompleteSummaryBeforeTerminalError(t *testing.T) {
 				Processed: 2,
 				Valid:     1,
 				Rejected:  1,
+				Confirmed: 2,
 				Rejections: map[domainingestion.ReasonCode]int64{
 					domainingestion.ReasonWatermarkPattern: 1,
 				},
@@ -208,7 +209,7 @@ func TestWriteRunResultPrintsCompleteSummaryBeforeTerminalError(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("writeRunResult() code = %d, want 1", code)
 	}
-	want := "table=posts processed=2 valid=1 rejected=1 malformed=0\n" +
+	want := "table=posts processed=2 valid=1 rejected=1 malformed=0 confirmed=2\n" +
 		"rejection table=posts reason=watermark_pattern count=1\n" +
 		"status=failed dry_run=true threshold_percent=10.0000 observed_percent=50.0000\n" +
 		"error table=posts offset=16 cause=rejected record percentage 50.0000 exceeds configured threshold 10.0000\n"

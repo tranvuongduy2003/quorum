@@ -10,7 +10,9 @@ var ErrInvalidThreshold = errors.New("reject threshold must be a finite percenta
 var ErrInvalidRecordLimit = errors.New("max record bytes must be from 1024 to 67108864")
 var ErrArchiveMemberMissing = errors.New("selected table is missing from archive")
 var ErrRejectThresholdExceeded = errors.New("rejected record percentage exceeds configured threshold")
-var ErrQuarantineStoreRequired = errors.New("quarantine store is required outside dry-run mode")
+var ErrWriterRequired = errors.New("writer is required outside dry-run mode")
+var ErrWriteCountMismatch = errors.New("confirmed write count does not match the requested batch")
+var ErrWriteRejected = errors.New("PostgreSQL rejected a COPY batch")
 
 type RejectThresholdError struct {
 	ObservedPercent  float64
