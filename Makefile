@@ -1,4 +1,4 @@
-.PHONY: up down api worker ingest-help ingest-small verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest quarantine-count
+.PHONY: up down api worker ingest-help ingest-small verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy quarantine-count
 
 up:
 	docker compose up -d
@@ -79,6 +79,9 @@ frontend-check:
 
 migrate-ingest:
 	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000001_ingest_quarantine.sql'
+
+migrate-copy:
+	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000002_corpus_tables.sql'
 
 quarantine-count:
 	@docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atc "SELECT count(*) FROM ingest_quarantine;"'
