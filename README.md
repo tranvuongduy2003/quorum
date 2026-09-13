@@ -5,6 +5,12 @@ Designed as a single-deployable backend service that serves a Stack Overflow–s
 
 > Note: This dataset includes the Stack Exchange Community Data Dump. Content is licensed under CC BY-SA (Stack Exchange Network).
 
+## Benchmark headlines
+
+| Path | Throughput | Evidence |
+|---|---:|---|
+| Binary COPY | 1,249,329 rows/sec | [SPEC-003 benchmark report](docs/benchmarks/SPEC-003-copy-results.md) |
+
 ## Quick start
 
 1. Start PostgreSQL and Redis: `make up`

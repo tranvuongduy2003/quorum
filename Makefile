@@ -1,4 +1,4 @@
-.PHONY: up down api worker ingest-help ingest-small guard-ingest-writes verify bench test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy quarantine-count
+.PHONY: up down api worker ingest-help ingest-small guard-ingest-writes verify bench bench-copy test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy migrate-copy-benchmark quarantine-count
 
 up:
 	docker compose up -d
@@ -48,6 +48,9 @@ verify:
 bench:
 	@echo "Running k6 benchmarks..."
 
+bench-copy:
+	cd backend && go run ./cmd/benchcopy --rows 1000000 --repetitions 3 --output ../docs/benchmarks/SPEC-003-copy-results.md
+
 test:
 	cd backend && go test ./...
 	cd backend && go vet ./...
@@ -85,6 +88,9 @@ migrate-ingest:
 
 migrate-copy:
 	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000002_corpus_tables.sql'
+
+migrate-copy-benchmark:
+	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000003_copy_benchmark.sql'
 
 quarantine-count:
 	@docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atc "SELECT count(*) FROM ingest_quarantine;"'
