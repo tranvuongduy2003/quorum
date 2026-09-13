@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +89,53 @@ func TestRenderReportIncludesRequiredSectionsAndEscapesCells(t *testing.T) {
 	}
 }
 
+func TestRenderReportLabelsSmokeAsNotPublishable(t *testing.T) {
+	report := reportFixture()
+	report.Rows = 10_000
+	report.Publishable = false
+	report.ThresholdMet = false
+	data, err := renderReport(report)
+	if err != nil {
+		t.Fatalf("renderReport() error = %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "- publishable: false") || !strings.Contains(text, "threshold_met: false") {
+		t.Fatalf("smoke publication labels missing:\n%s", text)
+	}
+}
+
+func TestPublishedEvidenceMatchesMakeTargetAndREADME(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	makefile := readRepositoryFile(t, filepath.Join(repositoryRoot, "Makefile"))
+	if !strings.Contains(makefile, "bench-copy:\n\tcd backend && go run ./cmd/benchcopy --rows 1000000 --repetitions 3 --output ../docs/benchmarks/SPEC-003-copy-results.md") {
+		t.Fatal("Makefile bench-copy target does not match the publication contract")
+	}
+
+	readme := readRepositoryFile(t, filepath.Join(repositoryRoot, "README.md"))
+	report := readRepositoryFile(t, filepath.Join(repositoryRoot, "docs", "benchmarks", "SPEC-003-copy-results.md"))
+	readmeRow := tableRow(t, readme, "| Binary COPY |")
+	reportRow := tableRow(t, report, "| binary COPY | 1000000 |")
+	if !strings.Contains(readmeRow, "[SPEC-003 benchmark report](docs/benchmarks/SPEC-003-copy-results.md)") {
+		t.Fatalf("README evidence link is missing: %s", readmeRow)
+	}
+	readmeFields := tableFields(readmeRow)
+	reportFields := tableFields(reportRow)
+	readmeThroughput := strings.ReplaceAll(strings.TrimSuffix(readmeFields[1], " rows/sec"), ",", "")
+	if readmeThroughput != reportFields[4] {
+		t.Fatalf("README throughput = %q, report throughput = %q", readmeThroughput, reportFields[4])
+	}
+	if strings.Count(section(report, "## Raw trials", "## Summary"), "| true |") != 12 {
+		t.Fatal("published report does not contain twelve eligible raw trials")
+	}
+	if !strings.Contains(report, "- publishable: true") || !strings.Contains(report, "threshold_met: true") {
+		t.Fatal("published report does not pass publication gates")
+	}
+}
+
 func TestGitIdentityReturnsRepositoryState(t *testing.T) {
 	sha, _, err := gitIdentity(context.Background())
 	if err != nil {
@@ -148,4 +198,45 @@ func reportFixture() usecasecopybenchmark.Report {
 		})
 	}
 	return report
+}
+
+func readRepositoryFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
+	}
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
+}
+
+func tableRow(t *testing.T, contents string, prefix string) string {
+	t.Helper()
+	for _, line := range strings.Split(contents, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	t.Fatalf("table row with prefix %q not found", prefix)
+	return ""
+}
+
+func tableFields(row string) []string {
+	parts := strings.Split(strings.Trim(row, "|"), "|")
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+	}
+	return parts
+}
+
+func section(contents string, start string, end string) string {
+	startIndex := strings.Index(contents, start)
+	if startIndex < 0 {
+		return ""
+	}
+	contents = contents[startIndex+len(start):]
+	endIndex := strings.Index(contents, end)
+	if endIndex < 0 {
+		return contents
+	}
+	return contents[:endIndex]
 }

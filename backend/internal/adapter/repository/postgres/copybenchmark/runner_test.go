@@ -3,6 +3,9 @@ package copybenchmark
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +83,50 @@ func TestTextRowEscapesCopySyntaxAndNulls(t *testing.T) {
 	wantPrefix := "a\\\\b\\tc\\rd\\ne\t11\t11\t2\t\\N\t"
 	if !strings.HasPrefix(got, wantPrefix) || !strings.Contains(got, "\t\\N\t640\n") {
 		t.Fatalf("text row = %q", got)
+	}
+}
+
+func TestBenchmarkMigrationAndRunnerPreserveSchemaIsolation(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+	backendRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "..", "..", ".."))
+	migrationPath := filepath.Join(backendRoot, "migrations", "000003_copy_benchmark.sql")
+	migration, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile() migration error = %v", err)
+	}
+	normalized := strings.Join(strings.Fields(string(migration)), " ")
+	for _, fragment := range []string{
+		"CREATE SCHEMA copy_benchmark",
+		"CREATE TABLE copy_benchmark.votes (",
+		"site text NOT NULL",
+		"id bigint NOT NULL",
+		"post_id bigint NOT NULL",
+		"vote_type_id smallint NOT NULL",
+		"user_id bigint",
+		"created_at timestamptz NOT NULL",
+		"bounty_amount integer",
+		"source_offset bigint NOT NULL CHECK (source_offset >= 0)",
+		"PRIMARY KEY (id)",
+	} {
+		if !strings.Contains(normalized, fragment) {
+			t.Errorf("benchmark migration missing %q", fragment)
+		}
+	}
+	if strings.Count(normalized, "CREATE TABLE") != 1 || strings.Contains(normalized, "CREATE TABLE posts") || strings.Contains(normalized, "CREATE TABLE votes (") {
+		t.Errorf("benchmark migration is not isolated: %s", normalized)
+	}
+
+	runnerPath := filepath.Join(filepath.Dir(filename), "runner.go")
+	runnerSource, err := os.ReadFile(runnerPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile() runner error = %v", err)
+	}
+	runnerText := strings.ToUpper(string(runnerSource))
+	if strings.Contains(runnerText, "CREATE SCHEMA") || strings.Contains(runnerText, "CREATE TABLE") || strings.Contains(runnerText, "DROP SCHEMA") || strings.Contains(runnerText, "DROP TABLE") {
+		t.Fatal("benchmark runner contains runtime DDL")
 	}
 }
 

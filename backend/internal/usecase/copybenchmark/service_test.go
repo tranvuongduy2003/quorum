@@ -89,6 +89,31 @@ func TestServiceRunSmokeIsNotPublishable(t *testing.T) {
 	}
 }
 
+func TestServiceRunBinaryThresholdBoundary(t *testing.T) {
+	passing := successfulRunner(PublishedRows)
+	passReport, err := NewService(passing).Run(context.Background(), PublishedRows, 3)
+	if err != nil {
+		t.Fatalf("Run() passing error = %v", err)
+	}
+	if !passReport.ThresholdMet {
+		t.Fatal("exact threshold did not pass")
+	}
+
+	failing := successfulRunner(PublishedRows)
+	for index := range failing.trials[StrategyBinaryCopy] {
+		trial := failing.trials[StrategyBinaryCopy][index]
+		trial.Elapsed = 20*time.Second + time.Nanosecond
+		failing.trials[StrategyBinaryCopy][index] = trial
+	}
+	failReport, err := NewService(failing).Run(context.Background(), PublishedRows, 3)
+	if err != nil {
+		t.Fatalf("Run() failing error = %v", err)
+	}
+	if failReport.ThresholdMet {
+		t.Fatal("below-threshold throughput passed")
+	}
+}
+
 func TestServiceRunRejectsInvalidInputsBeforeRunnerCalls(t *testing.T) {
 	for _, test := range []struct {
 		name        string
