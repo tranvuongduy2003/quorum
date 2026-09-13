@@ -16,7 +16,7 @@ GEMINI.md
 test/node_modules/
 test/playwright-report/
 test/test-results/
-docs/
+/docs/
 .agents
 .codex
 AGENTS.md

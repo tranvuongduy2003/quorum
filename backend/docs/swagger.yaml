@@ -1,0 +1,973 @@
+components:
+  schemas:
+    DatabaseTimeResponse:
+      properties:
+        database_time:
+          example: "2026-08-27T18:20:31Z"
+          format: date-time
+          type: string
+      required:
+      - database_time
+      type: object
+    DependencyStatus:
+      properties:
+        name:
+          enum:
+          - postgres
+          - redis
+          example: postgres
+          type: string
+        status:
+          enum:
+          - up
+          - down
+          example: up
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    EchoRequest:
+      properties:
+        message:
+          example: hello
+          maxLength: 280
+          minLength: 1
+          type: string
+      required:
+      - message
+      type: object
+    EchoResponse:
+      properties:
+        length:
+          example: 5
+          type: integer
+        message:
+          example: hello
+          type: string
+      required:
+      - length
+      - message
+      type: object
+    ErrorBody:
+      properties:
+        code:
+          enum:
+          - INVALID_JSON
+          - VALIDATION_FAILED
+          - NOT_FOUND
+          - METHOD_NOT_ALLOWED
+          - PAYLOAD_TOO_LARGE
+          - RATE_LIMITED
+          - REQUEST_TIMEOUT
+          - SERVICE_UNAVAILABLE
+          - INTERNAL
+          example: VALIDATION_FAILED
+          type: string
+        details:
+          items:
+            $ref: '#/components/schemas/FieldError'
+          type: array
+          uniqueItems: false
+        message:
+          example: the request contains one or more invalid values
+          type: string
+        request_id:
+          example: 9f1c0c2e-1f2a-4a9b-8f0e-2d6a3f7b1c44
+          type: string
+      required:
+      - code
+      - message
+      - request_id
+      type: object
+    ErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      required:
+      - error
+      type: object
+    FieldError:
+      properties:
+        code:
+          enum:
+          - REQUIRED
+          - TOO_LONG
+          - OUT_OF_RANGE
+          example: TOO_LONG
+          type: string
+        field:
+          example: message
+          type: string
+        message:
+          example: at most 280 characters
+          type: string
+      required:
+      - code
+      - field
+      - message
+      type: object
+    HealthResponse:
+      properties:
+        status:
+          enum:
+          - ok
+          example: ok
+          type: string
+      required:
+      - status
+      type: object
+    PingResponse:
+      properties:
+        message:
+          example: pong
+          type: string
+      required:
+      - message
+      type: object
+    ReadinessResponse:
+      properties:
+        checked_at:
+          example: "2026-08-27T18:20:31Z"
+          format: date-time
+          type: string
+        dependencies:
+          items:
+            $ref: '#/components/schemas/DependencyStatus'
+          type: array
+          uniqueItems: false
+        status:
+          enum:
+          - ready
+          - not_ready
+          example: ready
+          type: string
+      required:
+      - checked_at
+      - dependencies
+      - status
+      type: object
+externalDocs:
+  description: OpenAPI 3.1.0, the specification this document follows
+  url: https://spec.openapis.org/oas/v3.1.0.html
+info:
+  description: 'The service foundation for Quorum: health probes, diagnostics routes,
+    one shared error envelope and one shared rate-limit budget. Every failure except
+    the readiness report uses the same envelope, and every response carries an X-Request-Id
+    you can quote in a bug report.'
+  title: Quorum API
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /api/v1/db/time:
+    get:
+      description: Runs one query against PostgreSQL and returns its current time,
+        which proves the connection pool works end to end. The 503 carries no detail
+        about the cause; the request id is how to find it in the logs.
+      operationId: getDatabaseTime
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseTimeResponse'
+          description: OK
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the client has spent its budget for the current window
+          headers:
+            Retry-After:
+              description: seconds to wait before retrying
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: PostgreSQL is unreachable, or the rate limiter is unavailable
+            and configured to fail closed
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gateway Timeout
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Read the database clock
+      tags:
+      - diagnostics
+  /api/v1/debug/panic:
+    get:
+      description: Registered only when DEBUG_ROUTES_ENABLED is true, so it is absent
+        in most environments. It exists to exercise the recovery middleware, and it
+        always returns 500 in the standard envelope.
+      operationId: triggerPanic
+      responses:
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the client has spent its budget for the current window
+          headers:
+            Retry-After:
+              description: seconds to wait before retrying
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: always, by design
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the rate limiter is unavailable and configured to fail closed
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Panic on purpose
+      tags:
+      - debug
+  /api/v1/debug/slow:
+    get:
+      description: 'Registered only when DEBUG_ROUTES_ENABLED is true, so it is absent
+        in most environments. It exists to exercise the per-request timeout: ask for
+        longer than REQUEST_TIMEOUT and the answer is a 504 rather than a slow 200.'
+      operationId: getSlowResponse
+      parameters:
+      - description: milliseconds to sleep
+        in: query
+        name: ms
+        schema:
+          default: 2000
+          maximum: 30000
+          minimum: 0
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+          description: OK
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ms is not a whole number of milliseconds between 0 and 30000
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the client has spent its budget for the current window
+          headers:
+            Retry-After:
+              description: seconds to wait before retrying
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the rate limiter is unavailable and configured to fail closed
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the sleep outlasted the per-request timeout
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Sleep for a bounded time
+      tags:
+      - debug
+  /api/v1/echo:
+    post:
+      description: 'Validates the message as a domain value object and returns it
+        with its length in runes. The 400 covers two codes: INVALID_JSON for a body
+        that does not parse, and VALIDATION_FAILED for one that parses and breaks
+        a rule, with the offending field named in details.'
+      operationId: echoMessage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/EchoRequest'
+                description: the message to echo
+                summary: body
+        description: the message to echo
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EchoResponse'
+          description: OK
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: INVALID_JSON or VALIDATION_FAILED
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the body is larger than 65536 bytes
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the client has spent its budget for the current window
+          headers:
+            Retry-After:
+              description: seconds to wait before retrying
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the rate limiter is unavailable and configured to fail closed
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gateway Timeout
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Echo a message back
+      tags:
+      - diagnostics
+  /api/v1/ping:
+    get:
+      description: Cheapest versioned route. It touches no dependency, so it confirms
+        the router, the middleware chain and the rate-limit budget and nothing else.
+      operationId: getPing
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+          description: OK
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the client has spent its budget for the current window
+          headers:
+            Retry-After:
+              description: seconds to wait before retrying
+              schema:
+                type: integer
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal Server Error
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: the rate limiter is unavailable and configured to fail closed
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Gateway Timeout
+          headers:
+            X-RateLimit-Limit:
+              description: requests allowed per window
+              schema:
+                type: integer
+            X-RateLimit-Remaining:
+              description: requests left in the current window
+              schema:
+                type: integer
+            X-RateLimit-Reset:
+              description: seconds until the window resets
+              schema:
+                type: integer
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Ping the API
+      tags:
+      - diagnostics
+  /docs:
+    get:
+      description: A Scalar reference page that fetches the document from /openapi.yaml,
+        same origin, and renders it. The page itself is static and embedded; its script
+        comes from a version-pinned CDN with a subresource-integrity hash, so the
+        page renders blank without internet access. Registered only when DOCS_ENABLED
+        is true.
+      operationId: getAPIReference
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: the reference page
+          headers:
+            Cache-Control:
+              description: no-cache, because the document changes on deploy
+              schema:
+                type: string
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Browse the API reference
+      tags:
+      - documentation
+  /healthz:
+    get:
+      description: Answers as soon as the process can serve HTTP. It checks no dependency,
+        so it stays 200 while PostgreSQL or Redis are down. Orchestrators restart
+        a container on this one.
+      operationId: getLiveness
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+          description: OK
+          headers:
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Liveness probe
+      tags:
+      - health
+  /openapi.yaml:
+    get:
+      description: The contract for every route above, generated from the handlers
+        by swag and compiled into the binary. Registered only when DOCS_ENABLED is
+        true, and never rate limited, so a client that has spent its budget can still
+        read why.
+      operationId: getOpenAPIDocument
+      responses:
+        "200":
+          content:
+            application/yaml:
+              schema:
+                type: string
+          description: the OpenAPI 3.1 document
+          headers:
+            Cache-Control:
+              description: no-cache, because the document changes on deploy
+              schema:
+                type: string
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Fetch the OpenAPI document
+      tags:
+      - documentation
+  /readyz:
+    get:
+      description: 'Probes every dependency under one shared deadline and reports
+        each by name. The 503 is a report rather than an error: its body is the same
+        shape as the 200, not the error envelope, so a client parses one shape either
+        way. Load balancers remove a pod from rotation on this one.'
+      operationId: getReadiness
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+          description: OK
+          headers:
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+          description: one or more dependencies are down
+          headers:
+            X-Request-Id:
+              description: correlation id, present on every response
+              schema:
+                type: string
+      summary: Readiness probe
+      tags:
+      - health
+servers:
+- description: Local development
+  url: http://localhost:8080
+tags:
+- description: Liveness and readiness probes. Unversioned, never rate limited, and
+    meant for orchestrators rather than for people.
+  name: health
+- description: 'Versioned routes that exercise the service end to end: the router,
+    the error envelope, the rate limiter and the PostgreSQL pool.'
+  name: diagnostics
+- description: Routes that exist to provoke failure. Registered only when DEBUG_ROUTES_ENABLED
+    is true, so treat them as absent unless you know otherwise.
+  name: debug
+- description: This document and the reference page rendered from it. Registered only
+    when DOCS_ENABLED is true.
+  name: documentation

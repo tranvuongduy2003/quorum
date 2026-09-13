@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quorum API reference</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.67.0/dist/browser/standalone.min.js"
+      integrity="sha384-zH522fC6a57bnP3yLzTekKbq61WR1WnYu4dxusbB48q1eska2wE6/qmqHAHEkv+H"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      Scalar.createApiReference('#app', {
+        url: '/openapi.yaml',
+        darkMode: true,
+        hideDownloadButton: true,
+      })
+    </script>
+  </body>
+</html>

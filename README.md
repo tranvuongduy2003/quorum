@@ -28,7 +28,7 @@ Designed as a single-deployable backend service that serves a Stack Overflow–s
 
 Supply Stack Exchange archives at `data/<site>.7z` or pass an explicit path with `--archive`. Run `make ingest-help` to see every option and default. Run `make ingest-small` to inspect the `posts` table in `data/academia.stackexchange.com.7z` with dry-run enabled.
 
-Dry-run writes neither corpus nor quarantine data. Non-dry intake retains rejected rows in quarantine only; it does not load accepted corpus data. Operators are responsible for supplying archives, and archives and extracted data must never be committed to this repository.
+Dry-run writes neither corpus nor quarantine data. Non-dry intake writes accepted rows to the selected corpus tables and retains rejected rows in quarantine. Both paths stream directly from the archive without extracting members to disk. Operators are responsible for supplying archives, and archives and extracted data must never be committed to this repository.
 
 ## Validation
 
