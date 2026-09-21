@@ -25,6 +25,7 @@ const comparisonPackage = "quorum/internal/adapter/repository/postgres/copybench
 const modulePath = "quorum"
 
 var insertPattern = regexp.MustCompile(`(?i)\binsert\b`)
+var checkpointInsertPattern = regexp.MustCompile(`(?i)\binsert\s+into\s+ingest_checkpoints\b`)
 
 type Violation struct {
 	Kind    string
@@ -109,7 +110,8 @@ func Check(ctx context.Context, workingDir string, packagePattern string) ([]Vio
 					inspectErr = fmt.Errorf("unquote string literal in %q: %w", path, err)
 					return false
 				}
-				if insertPattern.MatchString(value) {
+				withoutCheckpointUpserts := checkpointInsertPattern.ReplaceAllString(value, "")
+				if insertPattern.MatchString(withoutCheckpointUpserts) {
 					violations = append(violations, Violation{
 						Kind:    KindInsertLiteral,
 						Package: pkg.ImportPath,

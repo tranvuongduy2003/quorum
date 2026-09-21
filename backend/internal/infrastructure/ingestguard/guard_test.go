@@ -44,6 +44,21 @@ func TestCheckFindsReachableInsertAndIgnoresUnreachableAndTestLiterals(t *testin
 	}
 }
 
+func TestCheckAllowsCheckpointMetadataUpsertAndStillRejectsCorpusInsert(t *testing.T) {
+	root := newModule(t)
+	writeModuleFile(t, root, "cmd/ingest/main.go", "package main\n\nimport \"quorum/internal/production\"\n\nfunc main() { _, _ = production.Checkpoint, production.Corpus }\n")
+	writeModuleFile(t, root, "internal/production/production.go", "package production\n\nconst Checkpoint = \"INSERT INTO ingest_checkpoints VALUES (1) ON CONFLICT DO NOTHING\"\nconst Corpus = \"INSERT INTO posts VALUES (1)\"\n")
+
+	violations, err := Check(context.Background(), root, "./cmd/ingest")
+
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if len(violations) != 1 || violations[0].Detail != "INSERT INTO posts VALUES (1)" {
+		t.Fatalf("violations = %#v", violations)
+	}
+}
+
 func TestCheckFindsReachableComparisonPackage(t *testing.T) {
 	root := newModule(t)
 	writeModuleFile(t, root, "cmd/ingest/main.go", "package main\n\nimport \"quorum/internal/adapter/repository/postgres/copybenchmark\"\n\nfunc main() { _ = copybenchmark.Name }\n")

@@ -43,6 +43,7 @@ func (Factory) Open(path string) (ingestion.Archive, error) {
 	}
 
 	nameToFileMap := make(map[string]*sevenzip.File)
+	members := make([]domainingestion.ArchiveMember, 0, len(reader.File))
 
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
@@ -50,14 +51,24 @@ func (Factory) Open(path string) (ingestion.Archive, error) {
 		}
 
 		nameToFileMap[file.Name] = file
+		members = append(members, domainingestion.ArchiveMember{
+			Name:  file.Name,
+			Size:  file.FileHeader.UncompressedSize,
+			CRC32: file.FileHeader.CRC32,
+		})
 	}
 
-	return &Archive{reader, nameToFileMap}, nil
+	return &Archive{
+		reader:   reader,
+		files:    nameToFileMap,
+		identity: domainingestion.ComputeArchiveIdentity(members),
+	}, nil
 }
 
 type Archive struct {
-	reader *sevenzip.ReadCloser
-	files  map[string]*sevenzip.File
+	reader   *sevenzip.ReadCloser
+	files    map[string]*sevenzip.File
+	identity domainingestion.ArchiveIdentity
 }
 
 func (a *Archive) ValidateTables(tables []domainingestion.Table) error {
@@ -122,4 +133,8 @@ func (a *Archive) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (a *Archive) Identity() domainingestion.ArchiveIdentity {
+	return a.identity
 }

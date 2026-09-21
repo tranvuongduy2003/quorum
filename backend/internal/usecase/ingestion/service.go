@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -18,16 +19,30 @@ type pendingWrites struct {
 	rawBytes   int64
 }
 
+type checkpointTracker struct {
+	archiveID              domainingestion.ArchiveIdentity
+	interval               int64
+	confirmedSinceLastSave int64
+}
+
 type Service struct {
-	archives ArchiveFactory
-	writer   Writer
-	now      func() time.Time
-	policies []domainingestion.Policy
+	archives    ArchiveFactory
+	writer      Writer
+	checkpoints CheckpointStore
+	reporter    CheckpointReporter
+	now         func() time.Time
+	policies    []domainingestion.Policy
+}
+
+func (s Service) WithCheckpointReporter(reporter CheckpointReporter) Service {
+	s.reporter = reporter
+	return s
 }
 
 func NewService(
 	archives ArchiveFactory,
 	writer Writer,
+	checkpoints CheckpointStore,
 	now func() time.Time,
 	policies ...domainingestion.Policy,
 ) Service {
@@ -36,10 +51,11 @@ func NewService(
 	}
 
 	return Service{
-		archives: archives,
-		writer:   writer,
-		now:      now,
-		policies: append([]domainingestion.Policy(nil), policies...),
+		archives:    archives,
+		writer:      writer,
+		checkpoints: checkpoints,
+		now:         now,
+		policies:    append([]domainingestion.Policy(nil), policies...),
 	}
 }
 func (s Service) Run(ctx context.Context, command Command) (summary RunSummary, runErr error) {
@@ -126,6 +142,46 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 		Rejections: make(map[domainingestion.ReasonCode]int64),
 	}
 
+	var tracker *checkpointTracker
+	if !command.DryRun && s.checkpoints != nil {
+		tracker = &checkpointTracker{
+			archiveID: archive.Identity(),
+			interval:  command.CheckpointInterval,
+		}
+	}
+
+	var checkpointOffset int64
+	if tracker != nil {
+		checkpoint, found, err := s.checkpoints.Load(ctx, command.Site, table)
+		if err != nil {
+			return summary, RunError{Table: table.String(), Offset: 0, Err: err}
+		}
+		if found {
+			if checkpoint.ArchiveID != tracker.archiveID {
+				return summary, RunError{
+					Table:  table.String(),
+					Offset: 0,
+					Err: fmt.Errorf(
+						"%w: stored=%s current=%s",
+						domainingestion.ErrIncompatibleArchive,
+						checkpoint.ArchiveID,
+						tracker.archiveID,
+					),
+				}
+			}
+
+			checkpointOffset = checkpoint.SourceOffset
+			summary.Confirmed = checkpoint.ConfirmedCount
+			summary.LastOffset = checkpoint.SourceOffset
+			summary.Resumed = true
+			summary.ResumedOffset = checkpoint.SourceOffset
+
+			if err := s.checkpoints.CleanAfterCheckpoint(ctx, command.Site, table, checkpointOffset); err != nil {
+				return summary, RunError{Table: table.String(), Offset: checkpointOffset, Err: err}
+			}
+		}
+	}
+
 	member, err := archive.OpenTable(ctx, table, command.MaxRecordBytes)
 	if err != nil {
 		var sourceErr SourceError
@@ -148,11 +204,12 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 		}
 	}()
 
+	skipping := summary.Resumed
 	for {
 		record, err := member.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				err = s.flushPending(ctx, command.Site, table, &pending, &summary)
+				err = s.flushAndCheckpoint(ctx, command.Site, table, &pending, &summary, tracker)
 				if err != nil {
 					return summary, err
 				}
@@ -178,6 +235,11 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 			}
 		}
 
+		if skipping && record.Offset <= checkpointOffset {
+			continue
+		}
+		skipping = false
+
 		summary.Processed++
 		summary.LastOffset = record.Offset
 
@@ -194,7 +256,7 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 		}
 
 		if pending.shouldFlush(record) {
-			err = s.flushPending(ctx, command.Site, table, &pending, &summary)
+			err = s.flushAndCheckpoint(ctx, command.Site, table, &pending, &summary, tracker)
 			if err != nil {
 				return summary, err
 			}
@@ -209,8 +271,9 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 
 		pending.rawBytes += int64(len(record.Raw))
 
-		if pending.count() >= copyBatchRows || pending.rawBytes >= copyBatchRawBytes {
-			err = s.flushPending(ctx, command.Site, table, &pending, &summary)
+		checkpointBoundary := tracker != nil && int64(pending.count()) >= tracker.remaining()
+		if pending.count() >= copyBatchRows || pending.rawBytes >= copyBatchRawBytes || checkpointBoundary {
+			err = s.flushAndCheckpoint(ctx, command.Site, table, &pending, &summary, tracker)
 			if err != nil {
 				return summary, err
 			}
@@ -218,6 +281,42 @@ func (s Service) processTable(ctx context.Context, archive Archive, table domain
 	}
 
 	return summary, nil
+}
+
+func (s Service) flushAndCheckpoint(
+	ctx context.Context,
+	site domainingestion.Site,
+	table domainingestion.Table,
+	pending *pendingWrites,
+	summary *TableSummary,
+	tracker *checkpointTracker,
+) error {
+	batchOffset := pending.maxOffset()
+	previousConfirmed := summary.Confirmed
+	if err := s.flushPending(ctx, site, table, pending, summary); err != nil {
+		return err
+	}
+	if tracker == nil || !tracker.advance(summary.Confirmed-previousConfirmed) {
+		return nil
+	}
+
+	checkpoint := domainingestion.NewCheckpoint(
+		site,
+		table,
+		tracker.archiveID,
+		batchOffset,
+		summary.Confirmed,
+		s.now(),
+	)
+	if err := s.checkpoints.Save(ctx, checkpoint); err != nil {
+		return RunError{Table: table.String(), Offset: batchOffset, Err: err}
+	}
+	if s.reporter != nil {
+		s.reporter.CheckpointSaved(checkpoint)
+	}
+
+	tracker.confirmedSinceLastSave = 0
+	return nil
 }
 
 func (s Service) flushPending(
@@ -291,6 +390,20 @@ func (p pendingWrites) count() int {
 	return len(p.accepted) + len(p.quarantine)
 }
 
+func (p pendingWrites) maxOffset() int64 {
+	result := int64(-1)
+	if len(p.accepted) > 0 {
+		result = p.accepted[len(p.accepted)-1].Offset
+	}
+	if len(p.quarantine) > 0 {
+		offset := p.quarantine[len(p.quarantine)-1].Source.Offset
+		if offset > result {
+			result = offset
+		}
+	}
+	return result
+}
+
 func (p pendingWrites) shouldFlush(next domainingestion.SourceRecord) bool {
 	currentCount := p.count()
 	if currentCount == 0 {
@@ -312,6 +425,15 @@ func (p *pendingWrites) reset() {
 	p.accepted = p.accepted[:0]
 	p.quarantine = p.quarantine[:0]
 	p.rawBytes = 0
+}
+
+func (t *checkpointTracker) advance(confirmed int64) bool {
+	t.confirmedSinceLastSave += confirmed
+	return t.confirmedSinceLastSave >= t.interval
+}
+
+func (t *checkpointTracker) remaining() int64 {
+	return t.interval - t.confirmedSinceLastSave
 }
 
 func writeFailure(err error, fallback int64) (int64, error) {

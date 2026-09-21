@@ -11,6 +11,8 @@ const (
 	DefaultMaxRecordBytes         = 8 * 1024 * 1024
 	MinRecordBytes                = 1024
 	MaxRecordBytes                = 64 * 1024 * 1024
+	DefaultCheckpointInterval     = 100_000
+	MinCheckpointInterval         = 1
 )
 
 type Command struct {
@@ -21,6 +23,7 @@ type Command struct {
 	RejectThresholdPercent float64
 	MaxRecordBytes         int
 	WatermarkPatternsPath  string
+	CheckpointInterval     int64
 }
 
 func NewCommand(
@@ -31,6 +34,7 @@ func NewCommand(
 	rejectThresholdPercent float64,
 	maxRecordBytes int,
 	watermarkPatternsPath string,
+	checkpointInterval int64,
 ) (Command, error) {
 	if len(tables) == 0 {
 		return Command{}, domainingestion.ErrEmptyTables
@@ -45,6 +49,9 @@ func NewCommand(
 
 	if maxRecordBytes < MinRecordBytes || maxRecordBytes > MaxRecordBytes {
 		return Command{}, ErrInvalidRecordLimit
+	}
+	if checkpointInterval < MinCheckpointInterval {
+		return Command{}, ErrInvalidCheckpointInterval
 	}
 
 	if archivePath != "" {
@@ -64,5 +71,6 @@ func NewCommand(
 		RejectThresholdPercent: rejectThresholdPercent,
 		MaxRecordBytes:         maxRecordBytes,
 		WatermarkPatternsPath:  watermarkPatternsPath,
+		CheckpointInterval:     checkpointInterval,
 	}, nil
 }

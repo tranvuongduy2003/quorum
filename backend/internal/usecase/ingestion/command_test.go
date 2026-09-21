@@ -19,6 +19,7 @@ func TestNewCommandCopiesTablesAndCleansPaths(t *testing.T) {
 		DefaultRejectThresholdPercent,
 		DefaultMaxRecordBytes,
 		"patterns/../watermarks.txt",
+		DefaultCheckpointInterval,
 	)
 	if err != nil {
 		t.Fatalf("NewCommand() error = %v", err)
@@ -33,6 +34,9 @@ func TestNewCommandCopiesTablesAndCleansPaths(t *testing.T) {
 	}
 	if command.WatermarkPatternsPath != filepath.Clean("patterns/../watermarks.txt") {
 		t.Fatalf("WatermarkPatternsPath = %q", command.WatermarkPatternsPath)
+	}
+	if command.CheckpointInterval != DefaultCheckpointInterval {
+		t.Fatalf("CheckpointInterval = %d", command.CheckpointInterval)
 	}
 }
 
@@ -57,7 +61,7 @@ func TestNewCommandRejectsInvalidRequestValues(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewCommand(domainingestion.Site("stackoverflow.com"), "source.7z", test.tables, false, test.threshold, test.maxBytes, "")
+			_, err := NewCommand(domainingestion.Site("stackoverflow.com"), "source.7z", test.tables, false, test.threshold, test.maxBytes, "", DefaultCheckpointInterval)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("NewCommand() error = %v, want %v", err, test.want)
 			}
@@ -75,9 +79,42 @@ func TestNewCommandAcceptsInclusiveRecordLimits(t *testing.T) {
 			0,
 			maxBytes,
 			"",
+			DefaultCheckpointInterval,
 		)
 		if err != nil {
 			t.Fatalf("NewCommand(maxBytes=%d) error = %v", maxBytes, err)
+		}
+	}
+}
+
+func TestNewCommandValidatesCheckpointInterval(t *testing.T) {
+	_, err := NewCommand(
+		domainingestion.Site("stackoverflow.com"),
+		"source.7z",
+		[]domainingestion.Table{domainingestion.TablePosts},
+		false,
+		DefaultRejectThresholdPercent,
+		DefaultMaxRecordBytes,
+		"",
+		MinCheckpointInterval-1,
+	)
+	if !errors.Is(err, ErrInvalidCheckpointInterval) {
+		t.Fatalf("NewCommand() error = %v", err)
+	}
+
+	for _, interval := range []int64{MinCheckpointInterval, DefaultCheckpointInterval, 1_000_000_000} {
+		command, err := NewCommand(
+			domainingestion.Site("stackoverflow.com"),
+			"source.7z",
+			[]domainingestion.Table{domainingestion.TablePosts},
+			false,
+			DefaultRejectThresholdPercent,
+			DefaultMaxRecordBytes,
+			"",
+			interval,
+		)
+		if err != nil || command.CheckpointInterval != interval {
+			t.Fatalf("NewCommand(%d) = %#v, %v", interval, command, err)
 		}
 	}
 }

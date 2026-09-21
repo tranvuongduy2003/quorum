@@ -1,4 +1,4 @@
-.PHONY: up down api worker ingest-help ingest-small guard-ingest-writes verify bench bench-copy test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy migrate-copy-benchmark quarantine-count
+.PHONY: up down api worker ingest-help ingest-small guard-ingest-writes verify bench bench-copy test test-integration test-e2e openapi openapi-lint backend-check frontend-dev frontend-build frontend-lint frontend-preview frontend-test frontend-check probe ready db-shell cache-shell logs migrate-ingest migrate-copy migrate-copy-benchmark migrate-checkpoint quarantine-count crash-trial-reference crash-trial-counts
 
 up:
 	docker compose up -d
@@ -92,5 +92,15 @@ migrate-copy:
 migrate-copy-benchmark:
 	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000003_copy_benchmark.sql'
 
+migrate-checkpoint:
+	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /migrations/000004_ingest_checkpoints.sql'
+
 quarantine-count:
 	@docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atc "SELECT count(*) FROM ingest_quarantine;"'
+
+crash-trial-reference:
+	docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE posts, post_bodies, users, comments, votes, badges, tags, post_links, post_history, ingest_quarantine, ingest_checkpoints CASCADE;"'
+	cd backend && go run ./cmd/ingest --site academia.stackexchange.com --archive ../data/academia.stackexchange.com.7z --tables posts,users,comments,votes,badges,tags,post_links --checkpoint-interval 1000
+
+crash-trial-counts:
+	@docker compose exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atc "SELECT '\''posts'\'', count(*) FROM posts WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''users'\'', count(*) FROM users WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''comments'\'', count(*) FROM comments WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''votes'\'', count(*) FROM votes WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''badges'\'', count(*) FROM badges WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''tags'\'', count(*) FROM tags WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''post_links'\'', count(*) FROM post_links WHERE site = '\''academia.stackexchange.com'\'' UNION ALL SELECT '\''quarantine'\'', count(*) FROM ingest_quarantine WHERE site = '\''academia.stackexchange.com'\'' ORDER BY 1;"'

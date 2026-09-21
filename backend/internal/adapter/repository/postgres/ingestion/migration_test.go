@@ -59,3 +59,32 @@ func TestCorpusMigrationContainsSchemaContract(t *testing.T) {
 		t.Error("migration makes a nullable corpus relationship mandatory")
 	}
 }
+
+func TestCheckpointMigrationContainsSchemaContract(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+
+	path := filepath.Join(filepath.Dir(filename), "..", "..", "..", "..", "..", "migrations", "000004_ingest_checkpoints.sql")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	sql := strings.Join(strings.Fields(string(contents)), " ")
+	for _, fragment := range []string{
+		"CREATE TABLE ingest_checkpoints (",
+		"site text NOT NULL",
+		"source_table text NOT NULL",
+		"archive_id text NOT NULL",
+		"source_offset bigint NOT NULL CHECK (source_offset >= 0)",
+		"confirmed_count bigint NOT NULL CHECK (confirmed_count >= 0)",
+		"updated_at timestamptz NOT NULL DEFAULT now()",
+		"PRIMARY KEY (site, source_table)",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("migration missing %q", fragment)
+		}
+	}
+}

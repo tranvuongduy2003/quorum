@@ -13,6 +13,8 @@ var ErrRejectThresholdExceeded = errors.New("rejected record percentage exceeds 
 var ErrWriterRequired = errors.New("writer is required outside dry-run mode")
 var ErrWriteCountMismatch = errors.New("confirmed write count does not match the requested batch")
 var ErrWriteRejected = errors.New("PostgreSQL rejected a COPY batch")
+var ErrCheckpointFailed = errors.New("checkpoint storage operation failed")
+var ErrInvalidCheckpointInterval = errors.New("checkpoint interval must be at least 1 confirmed record")
 
 type RejectThresholdError struct {
 	ObservedPercent  float64

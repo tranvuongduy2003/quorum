@@ -3,6 +3,7 @@ package ingestion
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	domainingestion "quorum/internal/domain/ingestion"
@@ -37,6 +38,23 @@ func TestPrintSummarySortsRejectionReasons(t *testing.T) {
 		"status=ok dry_run=true threshold_percent=100.0000 observed_percent=0.0000\n"
 	if got := output.String(); got != want {
 		t.Fatalf("PrintSummary() = %q, want %q", got, want)
+	}
+}
+
+func TestPrintSummaryReportsResumeOnlyForResumedTables(t *testing.T) {
+	summary := RunSummary{
+		Tables: []TableSummary{
+			{Table: domainingestion.TablePosts, Rejections: map[domainingestion.ReasonCode]int64{}, Resumed: true, ResumedOffset: 45},
+			{Table: domainingestion.TableVotes, Rejections: map[domainingestion.ReasonCode]int64{}},
+		},
+		Status: RunStatusOK,
+	}
+	var output bytes.Buffer
+
+	PrintSummary(&output, summary)
+
+	if got := output.String(); !strings.Contains(got, "resumed table=posts from_offset=45\n") || strings.Contains(got, "resumed table=votes") {
+		t.Fatalf("PrintSummary() = %q", got)
 	}
 }
 

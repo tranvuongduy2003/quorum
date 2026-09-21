@@ -29,6 +29,21 @@ type options struct {
 	dryRun                                                 bool
 	rejectThresholdPercent                                 float64
 	maxRecordBytes                                         int
+	checkpointInterval                                     int64
+}
+
+type checkpointReporter struct {
+	writer io.Writer
+}
+
+func (r checkpointReporter) CheckpointSaved(checkpoint domainingestion.Checkpoint) {
+	fmt.Fprintf(
+		r.writer,
+		"checkpoint table=%s source_offset=%d confirmed=%d\n",
+		checkpoint.Table,
+		checkpoint.SourceOffset,
+		checkpoint.ConfirmedCount,
+	)
 }
 
 func (o options) command() (usecaseingestion.Command, error) {
@@ -44,7 +59,7 @@ func (o options) command() (usecaseingestion.Command, error) {
 
 	rawPath := resolveArchivePath(site, o.archivePath)
 
-	return usecaseingestion.NewCommand(site, rawPath, tables, o.dryRun, o.rejectThresholdPercent, o.maxRecordBytes, o.watermarkPatternsPath)
+	return usecaseingestion.NewCommand(site, rawPath, tables, o.dryRun, o.rejectThresholdPercent, o.maxRecordBytes, o.watermarkPatternsPath, o.checkpointInterval)
 }
 
 func resolveArchivePath(site domainingestion.Site, explicit string) string {
@@ -117,6 +132,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	var writer usecaseingestion.Writer
+	var checkpointStore usecaseingestion.CheckpointStore
 	if !cmd.DryRun {
 		_, err := config.LoadEnvFile()
 		if err != nil {
@@ -145,10 +161,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		defer pgPool.Close()
 
 		writer = postgresingestion.NewStore(pgPool)
+		checkpointStore = postgresingestion.NewCheckpointRepository(pgPool)
 	}
 
 	factory := stackexchange.NewFactory()
-	service := usecaseingestion.NewService(factory, writer, time.Now, policies...)
+	service := usecaseingestion.NewService(factory, writer, checkpointStore, time.Now, policies...)
+	service = service.WithCheckpointReporter(checkpointReporter{writer: stdout})
 
 	summary, err := service.Run(ctx, cmd)
 	return writeRunResult(stdout, stderr, summary, err)
@@ -261,6 +279,9 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *options) {
 
 	opts.maxRecordBytes = 8388608
 	flags.IntVar(&opts.maxRecordBytes, "max-record-bytes", opts.maxRecordBytes, "Maximum decompressed bytes allowed for one source row")
+
+	opts.checkpointInterval = usecaseingestion.DefaultCheckpointInterval
+	flags.Int64Var(&opts.checkpointInterval, "checkpoint-interval", opts.checkpointInterval, "Save a durable checkpoint every N confirmed source records")
 
 	flags.Usage = func() {
 		writeUsage(stderr, flags)

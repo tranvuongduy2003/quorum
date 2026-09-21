@@ -31,6 +31,7 @@ func TestRunWritesHelpWithAllDefaultsToProvidedStderr(t *testing.T) {
 		"--dry-run  default=false",
 		"--reject-threshold  default=0.5",
 		"--max-record-bytes  default=8388608",
+		"--checkpoint-interval  default=100000",
 	} {
 		if !strings.Contains(output, fragment) {
 			t.Fatalf("help missing %q: %s", fragment, output)
@@ -50,6 +51,21 @@ func TestRunWritesLocatedRequestErrorsToProvidedStderr(t *testing.T) {
 	}
 	if got, want := stderr.String(), "error table=widgets offset=0 cause=unsupported corpus table \"widgets\"\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestCheckpointReporterWritesDurableProgressEvent(t *testing.T) {
+	var output bytes.Buffer
+	reporter := checkpointReporter{writer: &output}
+
+	reporter.CheckpointSaved(domainingestion.Checkpoint{
+		Table:          domainingestion.TablePosts,
+		SourceOffset:   81,
+		ConfirmedCount: 10_000,
+	})
+
+	if got, want := output.String(), "checkpoint table=posts source_offset=81 confirmed=10000\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 

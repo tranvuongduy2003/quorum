@@ -13,14 +13,16 @@ const RunStatusOK RunStatus = "ok"
 const RunStatusFailed RunStatus = "failed"
 
 type TableSummary struct {
-	Table      domainingestion.Table
-	Processed  int64
-	Valid      int64
-	Rejected   int64
-	Malformed  int64
-	Confirmed  int64
-	Rejections map[domainingestion.ReasonCode]int64
-	LastOffset int64
+	Table         domainingestion.Table
+	Processed     int64
+	Valid         int64
+	Rejected      int64
+	Malformed     int64
+	Confirmed     int64
+	Rejections    map[domainingestion.ReasonCode]int64
+	LastOffset    int64
+	Resumed       bool
+	ResumedOffset int64
 }
 
 type RunSummary struct {
@@ -66,6 +68,9 @@ func (s RunSummary) WithStatus(status RunStatus) RunSummary {
 }
 func PrintSummary(w io.Writer, summary RunSummary) {
 	for _, t := range summary.Tables {
+		if t.Resumed {
+			fmt.Fprintf(w, "resumed table=%v from_offset=%d\n", t.Table, t.ResumedOffset)
+		}
 		fmt.Fprintf(w, "table=%v processed=%d valid=%d rejected=%d malformed=%d confirmed=%d\n",
 			t.Table, t.Processed, t.Valid, t.Rejected, t.Malformed, t.Confirmed)
 
